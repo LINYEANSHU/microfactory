@@ -1,0 +1,17 @@
+# 依赖与构建产物
+node_modules/
+dist/
+.vite/
+
+# 本地优化报告与临时调试脚本（不随仓库发布）
+OPTIMIZATION-REPORT.md
+debug_example.ts
+.bench/
+
+# 本地预览草稿
+.preview-tmp/
+
+# 杂项
+*.local
+.DS_Store
+npm-debug.log*
