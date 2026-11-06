@@ -1,119 +1,107 @@
-<div align="center">
+# MicroFactory
 
-[![CI](https://github.com/LINYEANSHU/microfactory/actions/workflows/ci.yml/badge.svg)](https://github.com/LINYEANSHU/microfactory/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-f5a524.svg?style=flat-square)](LICENSE)
+[简体中文](README.md) · **English** · [CI](https://github.com/LINYEANSHU/microfactory/actions/workflows/ci.yml)
 
-[简体中文](README.md) | **English**
+<img src="assets/readme/hero.svg" width="100%" alt="MicroFactory: a browser 3D factory that turns ore into micro-robots; illustrated production line">
 
-<img src="assets/readme/hero.svg" width="100%" alt="MicroFactory — a miniature 3D factory automation game in your browser: ore flows by conveyor through a furnace, press and assembler into micro-robots that are shipped at the export terminal for credits">
+**Build a line, watch a jam travel upstream, then find the bottleneck.**
+MicroFactory is a single-player 3D automation game: mine, smelt, press, assemble and ship.
+Order income pays for upgrades and expansion. Game state stays in your browser, with no account or backend service.
 
-</div>
+<img src="assets/readme/current-desktop.png" width="100%" alt="Current interface, November 6, 2026: a demo factory on a floating island, build palette at left and orders with collapsible statistics at right">
 
-A miniature 3D factory that fits in your browser: lay conveyors, build production lines, refine ore into micro-robots and ship them for credits. Built with **Three.js + TypeScript + Vite** — it runs entirely in your browser. No backend, no account, nothing to install.
+<details>
+<summary>View the narrow layout (390 × 844)</summary>
 
-<img src="docs/screenshot.png" width="100%" alt="In-game screenshot: a low-poly floating-island factory with the orders, stats and bottleneck panels on the right">
+<img src="assets/readme/current-mobile.png" width="390" alt="Narrow factory layout: wrapped toolbar, on-demand Build and Overview panels, and an unobstructed view of the conveyors">
 
-## Features
+</details>
 
-- **Physical logistics with back-pressure** — belts hold 5 items per tile with a 0.25-tile minimum gap; items travel along straight and quarter-circle segments. When the downstream fills up, items genuinely jam and back-pressure propagates upstream — layout decides throughput.
-- **A complete production chain** — extractors (ore patches only) → furnaces → presses → assemblers → export terminal, with splitters, mergers and storage (four-way, FIFO) tying the logistics together. Every machine and belt has clearly drawn input/output ports.
-- **Recycler** — breaks surplus products back down into ingots along the crafting tree: gear → iron, 2 wire → copper, circuit → iron + copper, robot → 2 iron + copper. Ideal for relieving jams.
-- **Orders & economy** — export prices: ore 0 · ingots 2 · wire 3 · gears 6 · circuits 15 · robots 45. The orders panel keeps issuing delivery tasks with bonuses; after nine orders an endless chain takes over, with ever-growing targets.
-- **Machine upgrades** — levels 1→3 with ×1.5 / ×2.25 recipe speed; a three-bar signal lamp on each machine shows its level.
-- **Stats & bottleneck analysis** — export rate (60-second window), machine states, average utilization, belt load, a credits/exported history chart and a per-second robot sparkline. The game points out blocked or starved machines and suggests fixes.
-- **Milestones** — ten goals, from "First Shipment" to "Stockpile Master".
-- **Fully synthesized sound** — seven WebAudio sound effects (place / remove / export / order / goal / upgrade / error), zero audio assets, one-click mute.
-- **Bilingual UI (中文 / English)** — switch from the top bar; defaults to your browser language and remembers your choice in localStorage.
-- **Saves** — auto-saved to localStorage every 20 seconds, with JSON import / export.
+Captured during the November 6, 2026 desktop Chromium review using SwiftShader for CPU WebGL rendering. The narrow viewport is not a physical-phone test.
 
-## How to play
+## Why the line stops
 
-The production chain (1 robot = 2 iron ore + 1 copper ore):
+- **Items occupy space.** Belts have capacity and minimum spacing; a full destination blocks upstream traffic and stops machines.
+- **Ports define connections.** Green arrows mark inputs, orange arrows outputs; splitters, mergers and storage distribute the flow.
+- **Processing adds value.** Iron and copper become ingots, gears, wire and circuits, then micro-robots ready to ship.
+- **Expansion needs diagnosis.** Statistics show utilization, shipment rates and blocked/starved-machine advice. Machines reach level 3.
+- **Surplus can be recycled.** The recycler breaks products back into ingots along their crafting tree.
 
-```
-iron ⛏ ─→ furnace 🔥 ─→ ingot ─→ press 🔨 ─→ gear ─┬─→ assembler 🧩 ─→ circuit ─┐
-                                                    │                            ├─→ assembler 🤖 ─→ robot ─→ storage → export
-copper ⛏ ─→ furnace 🔥 ─→ ingot ─→ press 🔨 ─→ wire×2 ─┘                          ┘
-```
-
-- Machines have explicit **ports**: a green arrow marks the input, an orange arrow the output. Point a conveyor at the input and it feeds itself; machines push finished goods one tile ahead of their output port (machines can dock face-to-face, too).
-- When the downstream is full, items **physically jam** and back-pressure stacks all the way upstream, halting machines — split the flow, speed it up, upgrade downstream, or check the "Bottlenecks" panel for advice.
-- Conveyors corner automatically; **turbo conveyors** (3 tiles/s) shine on long main lines, and belts can merge sideways into each other.
-
-### Controls
-
-| Input | Action |
-| --- | --- |
-| Left click | Build / select (drag to lay a whole conveyor run) |
-| Right-drag | Pan |
-| Middle-drag / scroll / arrows | Orbit / zoom / pan |
-| `1`-`0` | Hot-select buildings |
-| `R` / `U` | Rotate building / upgrade selection |
-| `M` | Move selection (contents kept) |
-| `X` / `Q` | Demolish tool / select tool |
-| `Space` | Pause / resume |
-| `F3` | Performance details (frame time / draw calls) |
-| `H` | Help |
+Connect one working line, then inspect its buffers and bottlenecks. Orders and milestones supply the next targets.
 
 ## Getting started
+
+Requires Node.js 22.12 or a newer 22.x release (or 24.x), npm and a modern browser with WebGL 2 support.
 
 ```bash
 git clone https://github.com/LINYEANSHU/microfactory.git
 cd microfactory
-npm install     # install dependencies (Node ≥ 22)
-npm run dev     # dev server → http://localhost:5173 (rolls to the next port if busy)
+npm ci
+npm run dev
 ```
 
-Other commands:
+Open the address printed in the terminal, normally `http://localhost:5173`.
+Choose “Load demo factory” on first launch, or “Demo” in the toolbar, to watch a complete line. Chinese and English UI are available.
 
 ```bash
-npm run build       # production build → dist/
+npm run build       # output: dist/
 npm run preview     # preview the production build
-npm run test        # headless simulation tests (vitest, no browser needed)
-npm run typecheck   # TypeScript type check
 ```
 
-> Desktop Chrome or Edge is recommended. A welcome dialog appears on first launch — click "Load demo factory" to watch a complete production line in action.
+If Windows PowerShell blocks npm scripts, use `npm.cmd` for the same commands.
 
-## Architecture
+## Controls
 
-**Simulation and rendering are fully separated**: `src/sim/` is pure logic with zero Three.js dependencies, driven at a **fixed 30 Hz time step**, so changing speed or pausing never alters the physics; `src/render/` is the presentation layer; `src/ui/` holds the interface and sound.
+| Input | Action |
+| --- | --- |
+| Left click / left-drag | Build or select / lay a conveyor run |
+| Right-drag / middle-drag | Pan / orbit |
+| Scroll / arrow keys | Zoom / pan |
+| `1`–`0` | Select a building |
+| `R` / `U` / `M` | Rotate / upgrade / move the selected machine |
+| `X` / `Q` | Demolish tool / select tool |
+| `Space` / `Escape` | Pause / cancel the current action |
+| `H` / `F3` | Help / performance details |
 
-```
-src/
-  core/defs.ts        item / recipe / machine definitions (shared by sim & render)
-  sim/engine.ts       simulation engine: grid, belts, machines, ledger, serialization
-  sim/example.ts      demo factory layout
-  render/world.ts     scene / camera / lighting / floating-island environment
-  render/models.ts    machine models & moving-part animation
-  render/view.ts      merged belt meshes, instanced items, ghost preview & picking
-  render/icons.ts     offscreen 3D icons for the build palette
-  ui/i18n.ts          zh / en dictionary (type-checked for key parity)
-  ui/hud.ts           the whole interface: build palette / inspector / stats / goals / modals
-  ui/sound.ts         WebAudio synthesized sound effects
-  main.ts             game loop, input, tools, saves
-  test/               headless simulation tests (vitest)
-```
+Narrow layouts switch panels through “Build” and “Overview”; “More” holds import, export and secondary actions.
 
-- **Item conservation ledger**: `produced − consumed − exported − destroyed === items on the field`, checked for zero error throughout the tests; nothing spawns or vanishes unaccounted.
-- **Performance**: belts are on-demand merged meshes with a single scrolling-UV material; items are drawn with one `InstancedMesh` per type (one draw call each); machines share a material cache. In an in-page benchmark the whole frame pipeline (sim + animation + render) averages about 1 ms at 1080p.
+## Saves and migration
 
-## Tests
+The game auto-saves every 20 seconds to the current browser's `localStorage`; manual saving is also available.
+Use JSON export/import under “More” for backups or migration. Snapshots include a machine currently being moved.
+Imports load into an isolated simulation before replacing the active factory.
+
+A different browser profile, site address or port may use separate storage. Clearing site data removes local saves.
+Export `microfactory-save.json` to keep a long-lived factory.
+
+## Verification and limits
+
+Re-run on November 6, 2026:
 
 ```bash
-npm run test    # = vitest run, 38 tests
+npm run typecheck
+npm test
+npm run build
 ```
 
-Covered: production beats, jam back-pressure and recovery, splitter fairness, mergers and machine-to-machine docking, belt physics (capacity / saturation / corner arcs), recycler end-to-end and mixed feeding, export pricing, upgrade costs, the order chain, v1→v2 save migration with item-by-item in-flight restore, 900 s and 2400 s continuous runs of the demo factory, a 600 s factory with 30 extractors, and more. Every test asserts **zero conservation error**.
+- **38 / 38 tests passed**, covering production timing, back-pressure, recycling, economy, migration and long simulations.
+- Simulation uses a fixed 30 Hz step independently of Three.js; tests check the item-conservation ledger.
+- The same-day browser review covered 1440 × 900 and 390 × 844 layouts, language switching, saves, malformed imports and WebGL startup recovery.
+- The game uses Three.js / WebGL 2. SwiftShader supplied CPU rendering for that review; the normal development command does not force CPU rendering.
+- Physical phones, other browser engines and hardware-rendering performance were not verified. There is no universal FPS guarantee.
 
-## References & acknowledgements
+## Development entry points
 
-- [Three.js](https://threejs.org/) — 3D rendering
-- [TypeScript](https://www.typescriptlang.org/) and [Vite](https://vite.dev/) — language and build
-- [Vitest](https://vitest.dev/) — test framework
-- [Rajdhani](https://fonts.google.com/specimen/Rajdhani) (Google Fonts, self-hosted latin subset) — UI numerals and latin type
-- Gameplay inspired by [Factorio](https://factorio.com/) and [shapez](https://shapez.io/)
+`src/sim/` contains simulation and serialization, `src/render/` the scene and instanced drawing, and `src/ui/` the interface and synthesized audio.
+See [PRODUCT.md](PRODUCT.md) and [DESIGN.md](DESIGN.md) for the product and design notes (Chinese).
 
-## License
+## Contributors
 
-[MIT](LICENSE) © 2026 LINYEANSHU
+[LINYEANSHU](https://github.com/LINYEANSHU)
+
+## License and sources
+
+Code: [MIT](LICENSE) © 2026 LINYEANSHU.
+Built with [Three.js](https://threejs.org/), [TypeScript](https://www.typescriptlang.org/), [Vite](https://vite.dev/) and [Vitest](https://vitest.dev/).
+The UI bundles a [Rajdhani](https://fonts.google.com/specimen/Rajdhani) font subset; third-party code and fonts retain their respective licenses.
+Gameplay draws inspiration from [Factorio](https://factorio.com/) and [shapez](https://shapez.io/).

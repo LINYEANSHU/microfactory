@@ -1,119 +1,107 @@
-<div align="center">
+# MicroFactory
 
-[![CI](https://github.com/LINYEANSHU/microfactory/actions/workflows/ci.yml/badge.svg)](https://github.com/LINYEANSHU/microfactory/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-f5a524.svg?style=flat-square)](LICENSE)
+**简体中文** · [English](README.en.md) · [CI](https://github.com/LINYEANSHU/microfactory/actions/workflows/ci.yml)
 
-**简体中文** | [English](README.en.md)
+<img src="assets/readme/hero.svg" width="100%" alt="MicroFactory：把矿石加工成微型机器人的浏览器 3D 工厂；图中为生产线示意">
 
-<img src="assets/readme/hero.svg" width="100%" alt="MicroFactory —— 一座浏览器里的微型 3D 自动化工厂：矿石沿传送带经过熔炼、冲压、装配，变成微型机器人在出货终端换资金">
+**铺一条产线，看堵塞从下游一路传回来，再亲手解决它。**
+MicroFactory 是单人 3D 自动化工厂：采矿、熔炼、冲压、装配、出货，订单收入用来升级机器、扩大生产。
+游戏状态留在浏览器本地，无账号或后端服务。
 
-</div>
+<img src="assets/readme/current-desktop.png" width="100%" alt="2026-11-06 当前界面：浮岛上的示例工厂，左侧建造栏，右侧订单和可折叠统计">
 
-一座属于你的微型 3D 自动化工厂：铺设传送带、建造产线，把矿石一路加工成微型机器人出货赚钱。基于 **Three.js + TypeScript + Vite**，纯浏览器本地运行——无后端、无登录、无安装。
+<details>
+<summary>查看窄屏界面（390 × 844）</summary>
 
-<img src="docs/screenshot.png" width="100%" alt="游戏实拍：低多边形浮岛工厂，右侧为订单、工厂统计与瓶颈分析面板">
+<img src="assets/readme/current-mobile.png" width="390" alt="窄屏工厂界面：顶栏分行显示，建造与概览按需打开，中央保留产线视野">
 
-## 特性
+</details>
 
-- **真实物流与背压** — 传送带每格 5 件、最小间距 0.25 格，物品沿直线与四分之一圆弧移动；下游满载会真实堵住并一路反压到上游——布局决定产能。
-- **完整生产链** — 采矿机（限矿脉）→ 熔炼炉 → 冲压机 → 装配机 → 出货终端，分流器 / 合流器 / 仓库（四向进出、先进先出）衔接物流；机器与传送带都有明确的输入输出端口。
-- **回收机** — 把多余成品按制造树拆回原料锭：齿轮→铁锭、2铜线→铜锭、电路板→铁锭+铜锭、机器人→2铁锭+铜锭。堵线时用它泄洪。
-- **订单与经济** — 出货单价：原矿 0 · 锭 2 · 铜线 3 · 齿轮 6 · 电路板 15 · 机器人 45；订单面板持续下达交付任务并发放奖金，走完 9 单后进入无限订单（目标与奖励持续增长）。
-- **机器升级** — 1→3 级，配方速度 ×1.5 / ×2.25，机器角落的信号灯显示当前等级。
-- **统计与瓶颈分析** — 出货速率（60 秒滑窗）、机器状态概览、平均利用率、传送带负载、资金与累计出货历史曲线、机器人产能 sparkline；自动指出堵塞或缺料的机器并给出建议。
-- **生产目标** — 10 个里程碑，从「首批出货」到「仓储大师」。
-- **纯合成音效** — WebAudio 实时合成 7 种提示音（放置 / 拆除 / 出货 / 订单 / 目标 / 升级 / 错误），零素材文件，可一键开关。
-- **中英双语界面** — 顶栏一键切换，默认跟随浏览器语言，选择保存在 localStorage。
-- **存读档** — 浏览器 localStorage 每 20 秒自动保存，支持 JSON 存档导入 / 导出。
+截图来自 2026-11-06 的桌面 Chromium 审查，使用 SwiftShader 在 CPU 上执行 WebGL；窄视口截图不代表真实手机测试。
 
-## 玩法
+## 产线为什么会堵
 
-生产链（1 台机器人 = 2 铁矿 + 1 铜矿）：
+- **物品实际占位**：传送带有容量和最小间距，下游满载会阻挡上游，机器随之停工。
+- **端口决定连接**：绿色箭头是输入、橙色箭头是输出；分流器、合流器和仓库调配流量。
+- **加工带来价值**：铁矿与铜矿经过锭、齿轮、铜线、电路板，最终装成机器人出货。
+- **扩产需要诊断**：统计面板显示利用率、出货速率和堵塞/缺料建议；机器可升至 3 级。
+- **回收多余成品**：回收机沿制造树拆回原料锭，为积压物品提供另一条出路。
 
-```
-铁矿 ⛏ ─→ 熔炼炉 🔥 ─→ 铁锭 ─→ 冲压机 🔨 ─→ 齿轮 ─┬─→ 装配机 🧩 ─→ 电路板 ─┐
-                                                  │                        ├─→ 装配机 🤖 ─→ 微型机器人 ─→ 仓库 → 出货
-铜矿 ⛏ ─→ 熔炼炉 🔥 ─→ 铜锭 ─→ 冲压机 🔨 ─→ 铜线×2 ─┘                        ┘
-```
-
-- 机器有明确的**端口**：绿色箭头 = 输入，橙色箭头 = 输出；传送带指向输入口即可自动上料，机器从输出口向前方一格推送成品（机器之间也可以直接贴脸对接）。
-- 下游满载时，物品会**真实堵塞**并一路反压到上游，机器随之停产——分流、提速或升级下游，看「瓶颈分析」的建议。
-- 传送带拐弯自动成型；**高速传送带**（3 格/秒）适合长距离干线；传送带可以互相侧向汇入。
-
-### 操作
-
-| 输入 | 功能 |
-| --- | --- |
-| 左键 | 建造 / 选择（传送带支持拖动连续铺设） |
-| 右键拖动 | 平移视角 |
-| 中键拖动 / 滚轮 / 方向键 | 旋转视角 / 缩放 / 平移 |
-| `1`-`0` | 快速选择建筑 |
-| `R` / `U` | 旋转建筑 / 升级选中机器 |
-| `M` | 搬移选中机器（保留内部物品） |
-| `X` / `Q` | 拆除工具 / 选择工具 |
-| `空格` | 暂停 / 继续 |
-| `F3` | 性能详情（帧耗时 / draw calls） |
-| `H` | 帮助 |
+先把一条线接通，再观察缓冲区与瓶颈；订单和里程碑会给出后续目标。
 
 ## 快速开始
+
+需要 Node.js 22.12 或更新的 22.x（也支持 24.x）、npm 和支持 WebGL 2 的现代浏览器。
 
 ```bash
 git clone https://github.com/LINYEANSHU/microfactory.git
 cd microfactory
-npm install     # 安装依赖（Node ≥ 22）
-npm run dev     # 开发模式 → http://localhost:5173（端口被占用时自动顺延）
+npm ci
+npm run dev
 ```
 
-其他命令：
+打开终端显示的地址，默认是 `http://localhost:5173`。首次进入点击「加载示例工厂」，即可观察完整产线。
+也可在顶栏点击「示例」。界面支持中文/英文切换。
 
 ```bash
-npm run build       # 生产构建 → dist/
+npm run build       # 输出 dist/
 npm run preview     # 预览生产构建
-npm run test        # 无头模拟测试（vitest，不需要浏览器）
-npm run typecheck   # TypeScript 类型检查
 ```
 
-> 推荐 Chrome / Edge 桌面版。首次打开会弹出欢迎窗口，点「加载示例工厂」即可观看一条完整的生产线。
+Windows PowerShell 如拦截 npm 脚本，可使用 `npm.cmd` 执行相同命令。
 
-## 架构
+## 操作
 
-**模拟与渲染完全分离**：`src/sim/` 是纯逻辑（零 Three.js 依赖），以 **30Hz 固定时间步长**驱动，变速 / 暂停不影响物理结果；`src/render/` 负责表现；`src/ui/` 是界面与音效。
+| 输入 | 功能 |
+| --- | --- |
+| 左键 / 左键拖动 | 建造或选择 / 连续铺传送带 |
+| 右键拖动 / 中键拖动 | 平移 / 旋转视角 |
+| 滚轮 / 方向键 | 缩放 / 平移 |
+| `1`–`0` | 选择建筑 |
+| `R` / `U` / `M` | 旋转 / 升级 / 搬移选中机器 |
+| `X` / `Q` | 拆除工具 / 选择工具 |
+| `Space` / `Escape` | 暂停 / 取消当前操作 |
+| `H` / `F3` | 帮助 / 性能详情 |
 
-```
-src/
-  core/defs.ts        物品 / 配方 / 机器定义（模拟与渲染共享）
-  sim/engine.ts       模拟引擎：网格、传送带、机器、账本、序列化
-  sim/example.ts      示例工厂布局
-  render/world.ts     场景 / 相机 / 光照 / 浮岛环境
-  render/models.ts    机器模型与运动部件动画
-  render/view.ts      传送带合并网格、物品实例化、预览与拾取
-  render/icons.ts     建造面板 3D 图标离屏渲染
-  ui/i18n.ts          中英双语字典（类型同构，缺键即编译错误）
-  ui/hud.ts           全部界面：建造面板 / 检视器 / 统计 / 目标 / 模态框
-  ui/sound.ts         WebAudio 合成音效
-  main.ts             主循环、输入、工具、存读档
-  test/               无头模拟测试（vitest）
-```
+窄屏通过「建造」「概览」切换面板；导入、导出和其他次要操作收在「更多」。
 
-- **物品守恒记账**：`produced − consumed − exported − destroyed === 场上现存`，测试逐段校验误差为 0；不存在凭空生成或重复消耗。
-- **性能**：传送带为按需重建的合并网格（单一滚动 UV 材质），物品按类型用 `InstancedMesh` 实例化（每类型 1 次 draw call），机器共享材质缓存。页内基准下整帧流水线（模拟 + 动画 + 渲染）平均约 1ms/帧（1080p）。
+## 存档与迁移
 
-## 测试
+每 20 秒自动保存到当前浏览器的 `localStorage`，也可手动保存。
+「更多」中的 JSON 导出/导入用于备份与跨浏览器迁移；搬移中的机器也会写入快照。
+导入先在独立模拟中加载，通过后才替换当前工厂。
+
+浏览器配置、网站地址或端口变化可能对应另一份本地存储；清理网站数据会删除本地存档。
+长期保留的工厂请导出 `microfactory-save.json`。
+
+## 验证与边界
+
+2026-11-06 重新执行：
 
 ```bash
-npm run test    # = vitest run，38 项
+npm run typecheck
+npm test
+npm run build
 ```
 
-覆盖：基础生产节拍、堵塞回流与恢复、分流公平性、合流与机器直连、传送带物理（间距 / 满载 / 拐弯弧线）、回收机整线与混合进料、经济计价、升级扣款、订单链、v1→v2 存档迁移与逐件在途物品恢复、示例工厂 900 秒 / 2400 秒连续运行、600 秒大规模工厂（30 台采矿机）等。所有测试断言**物品守恒误差为 0**。
+- **38 / 38 测试通过**，覆盖生产节拍、物流背压、回收、经济、迁移和长时间模拟。
+- 模拟采用 30 Hz 固定步长，独立于 Three.js；测试核对物品守恒账本。
+- 同日浏览器审查覆盖 1440 × 900、390 × 844、语言切换、存档、损坏导入与 WebGL 启动失败恢复。
+- 游戏仍使用 Three.js / WebGL 2；SwiftShader 是本次 CPU 审查的渲染方式，普通开发命令不会强制 CPU 渲染。
+- 未验证真实手机、其他浏览器引擎或硬件渲染性能；这里不提供通用 FPS 承诺。
 
-## 参考与致谢
+## 开发入口
 
-- [Three.js](https://threejs.org/) — 3D 渲染
-- [TypeScript](https://www.typescriptlang.org/) 与 [Vite](https://vite.dev/) — 语言与构建
-- [Vitest](https://vitest.dev/) — 测试框架
-- [Rajdhani](https://fonts.google.com/specimen/Rajdhani)（Google Fonts，自托管 latin 子集）— 界面数字与拉丁字体
-- 玩法灵感来自 [Factorio](https://factorio.com/) 与 [shapez](https://shapez.io/) 
+`src/sim/` 是模拟和序列化，`src/render/` 是场景与实例化绘制，`src/ui/` 是界面与合成音效。
+规则与产品定位见 [PRODUCT.md](PRODUCT.md)，设计说明见 [DESIGN.md](DESIGN.md)。
 
-## License
+## 贡献者
 
-[MIT](LICENSE) © 2026 LINYEANSHU
+[LINYEANSHU](https://github.com/LINYEANSHU)
+
+## 许可与来源
+
+代码采用 [MIT](LICENSE) © 2026 LINYEANSHU。
+使用 [Three.js](https://threejs.org/)、[TypeScript](https://www.typescriptlang.org/)、[Vite](https://vite.dev/) 和 [Vitest](https://vitest.dev/)。
+界面自托管 [Rajdhani](https://fonts.google.com/specimen/Rajdhani) 字体子集；第三方代码与字体遵循各自许可。
+玩法受到 [Factorio](https://factorio.com/) 和 [shapez](https://shapez.io/) 启发。

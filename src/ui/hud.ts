@@ -117,6 +117,11 @@ export class Hud {
   private curSpeed = 1;
   private curSound = true;
   private icons: Record<EntKind, string> | null = null; // 3D 图标缓存（避免重建面板时重复离屏渲染）
+  private modalReturnFocus: HTMLElement | null = null;
+  private toolbarObserver = new ResizeObserver(() => {
+    const bar = document.getElementById('topbar');
+    if (bar) this.root.style.setProperty('--hud-top', `${bar.offsetTop + bar.offsetHeight + 10}px`);
+  });
 
   constructor(private hooks: HudHooks) {
     this.root = document.getElementById('ui')!;
@@ -125,6 +130,9 @@ export class Hud {
 
   /** 构建全部静态 DOM 并绑定事件（构造与语言切换时调用） */
   private buildStatic() {
+    this.toolbarObserver.disconnect();
+    this.speedBtns = [];
+    this.toolBtns.clear();
     this.root.innerHTML = `
       <div id="topbar" class="panel">
         <div class="logo">${icon('gear')}MicroFactory</div>
@@ -136,27 +144,32 @@ export class Hud {
         <div class="speed-group" id="speed-group"></div>
         <div class="divider"></div>
         <div id="perf">--</div>
-        <div class="divider"></div>
+        <div class="toolbar-actions">
+        <button class="btn mobile-panel-toggle" id="b-palette" aria-controls="palette" aria-expanded="false">${icon('factory')}${t('top.build')}</button>
+        <button class="btn mobile-panel-toggle" id="b-side" aria-controls="side" aria-expanded="false">${icon('chart')}${t('top.overview')}</button>
         <button class="btn" id="b-example">${t('top.example')}</button>
         <button class="btn" id="b-save" title="${t('top.saveTip')}">${icon('save')}${t('top.save')}</button>
+        <details class="file-menu"><summary class="btn">${icon('load')}${t('top.files')}</summary><div class="file-menu-body">
         <button class="btn" id="b-load" title="${t('top.loadTip')}">${icon('load')}${t('top.load')}</button>
         <button class="btn" id="b-export" title="${t('top.exportTip')}">${icon('share')}${t('top.export')}</button>
         <button class="btn" id="b-import" title="${t('top.importTip')}">${icon('unshare')}${t('top.import')}</button>
         <button class="btn danger" id="b-reset" title="${t('top.resetTip')}">${icon('reset')}${t('top.reset')}</button>
         <button class="btn" id="b-sound" title="${t('top.soundTip')}">${icon('sound')}</button>
-        <button class="btn" id="b-lang" title="${t('lang.tip')}">${icon('lang')}<span style="font-size:11.5px;font-weight:600">${t('lang.switch')}</span></button>
         <button class="btn" id="b-help" title="${t('top.helpTip')}">${icon('help')}</button>
+        </div></details>
+        <button class="btn" id="b-lang" title="${t('lang.tip')}">${icon('lang')}<span style="font-size:11.5px;font-weight:600">${t('lang.switch')}</span></button>
+        </div>
       </div>
       <div id="palette" class="panel"></div>
       <div id="side">
         <section id="orders" class="panel"><h3>${icon('bot')}${t('sec.orders')}<span class="after"></span></h3><div class="sec-body" id="orders-body"></div></section>
         <section id="inspector" class="panel"><h3>${icon('cursor')}${t('sec.inspector')}<span class="after"></span><span class="chev"></span></h3><div class="sec-body" id="inspector-body"></div></section>
-        <section id="stats" class="panel"><h3>${icon('chart')}${t('sec.stats')}<span class="after"></span><span class="chev"></span></h3><div class="sec-body" id="stats-body"></div></section>
-        <section id="goals" class="panel"><h3>${icon('target')}${t('sec.goals')}<span class="after"></span><span class="chev"></span></h3><div class="sec-body" id="goal-body"></div></section>
+        <section id="stats" class="panel collapsed"><h3>${icon('chart')}${t('sec.stats')}<span class="after"></span><span class="chev"></span></h3><div class="sec-body" id="stats-body"></div></section>
+        <section id="goals" class="panel collapsed"><h3>${icon('target')}${t('sec.goals')}<span class="after"></span><span class="chev"></span></h3><div class="sec-body" id="goal-body"></div></section>
       </div>
       <div id="hintbar" class="panel"></div>
-      <div id="toasts"></div>
-      <div id="modal-back" class="hidden"><div id="modal" class="panel"></div></div>
+      <div id="toasts" role="status" aria-live="polite"></div>
+      <div id="modal-back" class="hidden"><div id="modal" class="panel" role="dialog" aria-modal="true" tabindex="-1"></div></div>
       <input type="file" id="file-import" accept=".json" style="display:none" />
     `;
     this.perfEl = document.getElementById('perf')!;
@@ -187,27 +200,47 @@ export class Hud {
     this.buildSpeed();
     this.buildPalette();
     this.buildTopbarActions();
+    for (const id of ['palette', 'side']) {
+      document.getElementById(`b-${id}`)!.addEventListener('click', () => {
+        const open = !this.root.classList.contains(`show-${id}`);
+        for (const panel of ['palette', 'side']) {
+          this.root.classList.toggle(`show-${panel}`, open && panel === id);
+          document.getElementById(`b-${panel}`)!.setAttribute('aria-expanded', String(open && panel === id));
+        }
+      });
+    }
     for (const sec of [this.ordersSec, this.inspectorSec, this.statsSec, this.goalSec]) {
       const h = sec.querySelector('h3')!;
-      h.addEventListener('click', () => sec.classList.toggle('collapsed'));
+      h.setAttribute('role', 'button'); h.tabIndex = 0;
+      const sync = () => h.setAttribute('aria-expanded', String(!sec.classList.contains('collapsed')));
+      const toggle = () => { sec.classList.toggle('collapsed'); sync(); };
+      h.addEventListener('click', toggle);
+      h.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+      sync();
     }
     document.getElementById('file-import')!.addEventListener('change', (e) => {
       const f = (e.target as HTMLInputElement).files?.[0];
       if (f) this.hooks.importFile(f);
       (e.target as HTMLInputElement).value = '';
     });
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>('button[title]')) button.setAttribute('aria-label', button.title);
+    this.toolbarObserver.observe(document.getElementById('topbar')!);
   }
 
   /** 切换语言后重建整个 HUD，并恢复工具/速度/音效/资金/折叠状态 */
   rebuild() {
+    const tool = this.curTool, speed = this.curSpeed;
     const collapsed = new Set<string>();
     for (const sec of [this.ordersSec, this.inspectorSec, this.statsSec, this.goalSec]) {
       if (sec.classList.contains('collapsed')) collapsed.add(sec.id);
     }
     this.buildStatic();
-    for (const id of collapsed) document.getElementById(id)?.classList.add('collapsed');
-    this.setTool(this.curTool);
-    this.setSpeedBtn(this.curSpeed);
+    for (const sec of [this.ordersSec, this.inspectorSec, this.statsSec, this.goalSec]) {
+      sec.classList.toggle('collapsed', collapsed.has(sec.id));
+      sec.querySelector('h3')!.setAttribute('aria-expanded', String(!collapsed.has(sec.id)));
+    }
+    this.setTool(tool);
+    this.setSpeedBtn(speed);
     this.setSoundOn(this.curSound);
     if (this.creditsVal >= 0) {
       this.creditsValEl = document.getElementById('credits-val');
@@ -229,6 +262,7 @@ export class Hud {
       b.className = 'btn';
       b.innerHTML = ic + (label ? `<span style="font-size:11.5px;font-weight:600">${label}</span>` : '');
       b.title = title;
+      b.setAttribute('aria-label', title);
       b.addEventListener('click', () => this.hooks.setSpeed(i));
       group.appendChild(b);
       this.speedBtns.push(b);
@@ -267,7 +301,8 @@ export class Hud {
       pal.appendChild(h);
       for (const k of kinds) {
         const d = DEFS[k];
-        const card = document.createElement('div');
+        const card = document.createElement('button');
+        card.type = 'button';
         card.className = 'pcard';
         card.innerHTML = `
           <img src="${icons[k]}" alt="${kindName(k)}" />
@@ -306,7 +341,12 @@ export class Hud {
   // ---------------- 状态设置 ----------------
   setTool(t2: Tool) {
     this.curTool = t2;
-    for (const [k, el] of this.toolBtns) el.classList.toggle('selected', k === t2);
+    for (const [k, el] of this.toolBtns) {
+      el.classList.toggle('selected', k === t2);
+      el.setAttribute('aria-pressed', String(k === t2));
+    }
+    this.root.classList.remove('show-palette');
+    document.getElementById('b-palette')?.setAttribute('aria-expanded', 'false');
     const app = document.getElementById('app')!;
     app.className = t2 === 'pointer' ? '' : t2 === 'bulldoze' ? 'tool-bulldoze' : 'tool-build';
     const tips: Array<[Tool, string]> = [
@@ -323,7 +363,7 @@ export class Hud {
 
   setSpeedBtn(idx: number) {
     this.curSpeed = idx;
-    this.speedBtns.forEach((b, i) => b.classList.toggle('active', i === idx));
+    this.speedBtns.forEach((b, i) => { b.classList.toggle('active', i === idx); b.setAttribute('aria-pressed', String(i === idx)); });
   }
 
   setPerf(html: string, warn: boolean) {
@@ -639,6 +679,7 @@ export class Hud {
 
   // ---------------- 模态框 ----------------
   showModal(html: string, actions: Array<{ label: string; cls?: string; cb: () => void }>) {
+    if (this.modalBack.classList.contains('hidden')) this.modalReturnFocus = document.activeElement as HTMLElement;
     this.modalEl.innerHTML = html + `<div class="modal-actions" id="modal-actions"></div>`;
     const act = document.getElementById('modal-actions')!;
     for (const a of actions) {
@@ -649,9 +690,22 @@ export class Hud {
       act.appendChild(b);
     }
     this.modalBack.classList.remove('hidden');
+    const title = this.modalEl.querySelector('h2');
+    if (title) { title.id = 'modal-title'; this.modalEl.setAttribute('aria-labelledby', title.id); }
+    this.modalEl.focus();
+    this.modalEl.onkeydown = e => {
+      if (e.key !== 'Tab') return;
+      const buttons = [...this.modalEl.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+      if (!buttons.length) return;
+      const first = buttons[0], last = buttons[buttons.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === this.modalEl)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || document.activeElement === this.modalEl)) { e.preventDefault(); first.focus(); }
+    };
   }
 
-  closeModal() { this.modalBack.classList.add('hidden'); }
+  closeModal() { this.modalBack.classList.add('hidden'); this.modalReturnFocus?.focus(); }
+
+  get modalOpen() { return !this.modalBack.classList.contains('hidden'); }
 
   confirm(title: string, msg: string, okLabel: string, cb: () => void) {
     this.showModal(`<h2>${icon('warn')}${title}</h2><p>${msg}</p>`, [

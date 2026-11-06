@@ -41,7 +41,8 @@ export class SoundKit {
   enabled: boolean;
 
   constructor() {
-    const saved = localStorage.getItem('microfactory.sound');
+    let saved: string | null = null;
+    try { saved = localStorage.getItem('microfactory.sound'); } catch { /* Storage may be unavailable. */ }
     this.enabled = saved !== null ? saved === '1' : true; // 默认开启
   }
 
@@ -63,7 +64,7 @@ export class SoundKit {
 
   setEnabled(on: boolean) {
     this.enabled = on;
-    localStorage.setItem('microfactory.sound', on ? '1' : '0');
+    try { localStorage.setItem('microfactory.sound', on ? '1' : '0'); } catch { /* Keep the session preference. */ }
   }
 
   play(name: SoundName) {

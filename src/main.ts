@@ -25,7 +25,7 @@ const sound = new SoundKit();
 let tool: Tool = 'pointer';
 let ghostRot: Dir = 3;
 let paused = false;
-let speedIdx = 1; // SPEEDS 下标
+let speedIdx = 0; // SPEEDS 下标，默认 1×，与 HUD 一致
 let acc = 0;
 let selected: Ent | null = null;
 let hoverCell: { x: number; y: number } | null = null;
@@ -50,6 +50,7 @@ const hud = new Hud({
   importFile: (f: File) => importFile(f),
   reset: () => hud.confirm(t('reset.title'), t('reset.msg'), t('reset.ok'), () => {
     clearSim();
+    saveGame(false);
     hud.toast(t('toast.reset'));
   }),
   example: () => {
@@ -320,12 +321,17 @@ dom.addEventListener('pointermove', (ev) => {
 });
 
 window.addEventListener('pointerup', () => { dragging = false; dragLast = null; });
+window.addEventListener('pointercancel', () => { dragging = false; dragLast = null; });
+window.addEventListener('blur', () => { dragging = false; dragLast = null; });
 dom.addEventListener('pointerleave', () => { hoverCell = null; view.setHover(null, 'pointer'); view.positionGhost(null); });
 dom.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---------------- 键盘 ----------------
 window.addEventListener('keydown', (ev) => {
-  if (ev.repeat) return;
+  if (ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const target = ev.target as HTMLElement;
+  if (hud.modalOpen || target.closest('input, textarea, select, [contenteditable="true"]')) return;
+  if ((ev.key === ' ' || ev.key === 'Enter') && target.closest('button, summary, [role="button"]')) return;
   sound.unlock(); // 首次手势解锁 AudioContext（幂等）
   const k = ev.key.toLowerCase();
   if (k >= '1' && k <= '9') {
@@ -346,7 +352,7 @@ window.addEventListener('keydown', (ev) => {
       else if (tool !== 'pointer') switchTool('pointer');
       else select(null);
       break;
-    case 'f3': ev.preventDefault(); perfDetail = !perfDetail; break;
+    case 'f3': ev.preventDefault(); perfDetail = !perfDetail; document.body.classList.toggle('perf-detail', perfDetail); break;
     case 'h': hud.showHelp(); break;
   }
 });
@@ -363,7 +369,7 @@ function emptySave() {
 
 function saveGame(verbose: boolean) {
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify({ sim: sim.serialize(), ts: Date.now() }));
+    localStorage.setItem(SAVE_KEY, JSON.stringify({ sim: snapshot(), ts: Date.now() }));
     if (verbose) hud.toast(t('toast.saved'));
   } catch (e) {
     if (verbose) hud.toast(t('toast.saveFail'), 'error-toast');
@@ -371,9 +377,9 @@ function saveGame(verbose: boolean) {
 }
 
 function loadGame() {
-  const raw = localStorage.getItem(SAVE_KEY);
-  if (!raw) { hud.toast(t('toast.noSave'), 'error-toast'); return; }
   try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) { hud.toast(t('toast.noSave'), 'error-toast'); return; }
     applySave(JSON.parse(raw));
     hud.toast(t('toast.loaded'));
   } catch (e) {
@@ -382,7 +388,12 @@ function loadGame() {
 }
 
 function applySave(data: any) {
-  sim.load(data.sim ?? data);
+  const payload = data?.sim ?? data;
+  if (!payload || !Array.isArray(payload.ents) || !payload.ledger || typeof payload.ledger !== 'object') throw new Error('Invalid save');
+  // Validate in an isolated simulation so a malformed import cannot clear the current factory.
+  const candidate = new Sim();
+  candidate.load(payload);
+  sim.load(candidate.serialize());
   view.rebuildAll();
   select(null);
   if (moving) moving = null;
@@ -390,7 +401,7 @@ function applySave(data: any) {
 }
 
 function exportFile() {
-  const blob = new Blob([JSON.stringify({ sim: sim.serialize(), ts: Date.now() }, null, 1)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ sim: snapshot(), ts: Date.now() }, null, 1)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'microfactory-save.json';
@@ -405,7 +416,14 @@ function importFile(f: File) {
       applySave(JSON.parse(txt));
       hud.toast(t('toast.imported'));
     } catch { hud.toast(t('toast.parseFail'), 'error-toast'); }
-  });
+  }).catch(() => hud.toast(t('toast.parseFail'), 'error-toast'));
+}
+
+function snapshot() {
+  const data = sim.serialize();
+  // A machine in transit is extracted from cells but still belongs to the factory.
+  if (moving) data.ents.push({ ...moving.data, x: moving.from.x, y: moving.from.y });
+  return data;
 }
 
 function clearSim() {
@@ -418,10 +436,10 @@ function clearSim() {
 
 // 自动存档
 setInterval(() => {
-  if (sim.procs.length + sim.nodes.length + sim.belts.length + sim.terminals.length > 0) saveGame(false);
+  saveGame(false);
 }, 20000);
 window.addEventListener('beforeunload', () => {
-  if (sim.procs.length + sim.belts.length > 0) saveGame(false);
+  saveGame(false);
 });
 
 // ---------------- 性能统计 ----------------
@@ -489,6 +507,7 @@ function refreshUi(rawDt: number) {
 // ---------------- 调试钩子（自动化测试用） ----------------
 (window as any).__mf = {
   sim, view, world, hud,
+  select: (x: number, y: number) => select(sim.get(x, y)),
   place: (k: EntKind, x: number, y: number, r: Dir = 0) => placeAt({ x, y }, k, r),
   remove: (x: number, y: number) => removeAt({ x, y }),
   upgrade: (x: number, y: number) => { const ok = sim.upgrade(x, y); if (ok) { const e = sim.get(x, y); if (e) view.onUpgraded(e); } return ok; },
@@ -538,10 +557,11 @@ function frame(now: number) {
 }
 
 // ---------------- 启动 ----------------
-const hasSave = !!localStorage.getItem(SAVE_KEY);
-if (hasSave) {
-  try { applySave(JSON.parse(localStorage.getItem(SAVE_KEY)!)); } catch { /* 忽略损坏存档 */ }
-}
+let hasSave = false;
+try {
+  const raw = localStorage.getItem(SAVE_KEY);
+  if (raw) { applySave(JSON.parse(raw)); hasSave = true; }
+} catch { /* Unavailable storage or damaged data starts a fresh factory. */ }
 hud.setTool('pointer');
 hud.refreshStats(sim);
 hud.refreshGoals(sim);

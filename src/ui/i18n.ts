@@ -19,6 +19,9 @@ const zh = {
   // 顶栏
   'top.creditsTip': '资金：出货与完成订单获得，用于升级机器',
   'top.example': '示例',
+  'top.build': '建造',
+  'top.overview': '概览',
+  'top.files': '更多',
   'top.save': '保存',
   'top.saveTip': '保存到浏览器（每 20 秒自动保存）',
   'top.load': '读取',
@@ -284,6 +287,9 @@ const en: Record<TKey, string> = {
   // Top bar
   'top.creditsTip': 'Credits: earned from exports and completed orders, spent on machine upgrades',
   'top.example': 'Demo',
+  'top.build': 'Build',
+  'top.overview': 'Overview',
+  'top.files': 'More',
   'top.save': 'Save',
   'top.saveTip': 'Save to your browser (auto-saves every 20 s)',
   'top.load': 'Load',
