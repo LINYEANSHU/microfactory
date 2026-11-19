@@ -33,6 +33,7 @@ let dragging = false;
 let dragLast: { x: number; y: number } | null = null;
 let moving: { data: SerEnt; from: { x: number; y: number } } | null = null;
 let perfDetail = false;
+let welcomeOpen = false;
 
 // ---------------- HUD ----------------
 const uiRoot = document.createElement('div');
@@ -434,12 +435,12 @@ function clearSim() {
   view.setGhost(null, 0, true);
 }
 
-// 自动存档
+// 自动存档（首次欢迎引导尚未选择时不写入空存档）
 setInterval(() => {
-  saveGame(false);
+  if (!welcomeOpen) saveGame(false);
 }, 20000);
 window.addEventListener('beforeunload', () => {
-  saveGame(false);
+  if (!welcomeOpen) saveGame(false);
 });
 
 // ---------------- 性能统计 ----------------
@@ -568,14 +569,17 @@ hud.refreshGoals(sim);
 refreshInspector();
 if (!hasSave) {
   paused = true;
+  welcomeOpen = true;
   hud.setSpeedBtn(0);
   hud.showWelcome(false, () => {
+    welcomeOpen = false;
     buildExample(sim);
     view.rebuildAll();
     paused = false;
     hud.setSpeedBtn(1);
     hud.toast(t('toast.exampleStart'));
   }, () => {
+    welcomeOpen = false;
     paused = false;
     hud.setSpeedBtn(1);
     switchTool('belt');

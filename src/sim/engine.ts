@@ -3,7 +3,7 @@
 // 固定时间步长驱动；所有物品流动遵循守恒，由 ledger 记账。
 // ============================================================
 import {
-  DIRS, ItemKey, Dir, EntKind, Recipe, recipesFor, recipeById, inputPortsFor, ORE_ITEM,
+  DIRS, DEFS, ItemKey, Dir, EntKind, Recipe, recipesFor, recipeById, inputPortsFor, ORE_ITEM,
   SPACING, BELT_SPEED, TURBO_SPEED, NODE_QUEUE_MAX, STORAGE_CAP, POOL_CAP,
   OUT_CAP, EXTRACT_TIME, EXTRACT_OUT_CAP, GRID, PATCHES, relDir,
   FRONT, RIGHT, BACK, LEFT,
@@ -205,7 +205,9 @@ export class Sim {
   }
 
   insertEnt(s: SerEnt): boolean {
-    if (!this.inBounds(s.x, s.y)) return false;
+    if (!s || typeof s.k !== 'string' || !Object.prototype.hasOwnProperty.call(DEFS, s.k)) return false;
+    if (!Number.isInteger(s.x) || !Number.isInteger(s.y) || !this.inBounds(s.x, s.y)) return false;
+    if (!Number.isInteger(s.r) || s.r < 0 || s.r > 3) return false;
     if (this.cells[this.idx(s.x, s.y)] !== null) return false;
     if (s.k === 'extractor' && !this.oreAt(s.x, s.y)) return false;
     const e = this.makeEnt(s.k, s.x, s.y, s.r);
@@ -218,7 +220,11 @@ export class Sim {
       e.progress = d.prog || 0;
       e.level = Math.min(MAX_LEVEL, Math.max(1, d.lvl || 1));
       e.recipe = d.rec ? recipeById(d.rec) : null;
-      if (e.kind === 'extractor') e.ore = d.ore || 'iron';
+      if (e.kind === 'extractor') {
+        const patchOre = this.oreAt(s.x, s.y) ?? 'iron';
+        e.ore = patchOre;
+        if (d.ore && d.ore !== patchOre) { e.recipe = null; e.progress = 0; }
+      }
     }
     if (e.counts) e.counts = new Map((d.counts || []).map((a: any) => [a[0], a[1]]));
     this.install(e);
@@ -584,12 +590,22 @@ export class Sim {
     // 清空
     this.cells.fill(null);
     this.belts = []; this.nodes = []; this.procs = []; this.terminals = [];
-    this.time = data.time || 0;
+    const cleanCount = (src: any): Record<ItemKey, number> => {
+      const base = emptyCount();
+      if (src && typeof src === 'object') {
+        for (const k of Object.keys(base) as ItemKey[]) {
+          const v = Number(src[k]);
+          if (Number.isFinite(v) && v >= 0) base[k] = v;
+        }
+      }
+      return base;
+    };
+    this.time = Number.isFinite(data.time) && data.time >= 0 ? data.time : 0;
     this.ledger = {
-      produced: { ...emptyCount(), ...data.ledger.produced },
-      consumed: { ...emptyCount(), ...(data.ledger as any).consumed },
-      exported: { ...emptyCount(), ...data.ledger.exported },
-      destroyed: { ...emptyCount(), ...data.ledger.destroyed },
+      produced: cleanCount(data.ledger.produced),
+      consumed: cleanCount((data.ledger as any).consumed),
+      exported: cleanCount(data.ledger.exported),
+      destroyed: cleanCount(data.ledger.destroyed),
     };
     this.totalExported = Object.values(this.ledger.exported).reduce((a, b) => a + b, 0);
     // 重置 60 秒出货统计环与秒采样累计，避免旧对局的速率残留到新对局
@@ -598,14 +614,22 @@ export class Sim {
     for (let i = 0; i < this.exportRing.length; i++) this.exportRing[i] = emptyCount();
     this.goals = new Set(data.goals || []);
     // 经济/订单（v1 存档迁移：补发启动资金，订单从当前累计量起算）
-    this.credits = typeof data.credits === 'number' ? data.credits : START_CREDITS;
-    this.orderIdx = data.orderIdx ?? 0;
-    this.orderBase = data.orderBase ?? this.ledger.exported[orderAt(this.orderIdx).item];
+    this.credits = typeof data.credits === 'number' && Number.isFinite(data.credits) ? data.credits : START_CREDITS;
+    this.orderIdx = Number.isInteger(data.orderIdx) && data.orderIdx! >= 0 ? data.orderIdx! : 0;
+    this.orderBase = typeof data.orderBase === 'number' && Number.isFinite(data.orderBase) ? data.orderBase : this.ledger.exported[orderAt(this.orderIdx).item];
     // 历史曲线（旧存档无此字段 → 空数组重新采样）
     this.hist = (data.hist || []).map((h: [number, number, number]) => ({ t: h[0], credits: h[1], exported: h[2] }));
     this.histAcc = 0;
     this.nextId = 1;
-    for (const s of data.ents) this.insertEnt(s);
+    for (const s of data.ents) {
+      if (!s || typeof s.k !== 'string' || !Object.prototype.hasOwnProperty.call(DEFS, s.k)) {
+        throw new Error(`Invalid entity kind: ${String(s?.k)}`);
+      }
+      if (!Number.isInteger(s.x) || !Number.isInteger(s.y) || !Number.isInteger(s.r) || s.r < 0 || s.r > 3) {
+        throw new Error(`Invalid entity placement at ${s?.x},${s?.y}`);
+      }
+      this.insertEnt(s);
+    }
     let maxId = 0;
     for (const c of this.cells) if (c && c.id > maxId) maxId = c.id;
     this.nextId = maxId + 1;
