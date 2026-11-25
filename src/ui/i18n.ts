@@ -109,6 +109,12 @@ const zh = {
   // 订单面板
   'order.no': '订单 {n} 号',
   'order.note': '在出货终端交付 {item}，完成后获得奖金，订单自动接续，难度递增。',
+  'contract.title': '加急合同',
+  'contract.timer': '{seconds} 秒模拟时间',
+  'contract.offer': '接单后开始计时，期间的出货才计入进度。限时 {timer}。',
+  'contract.accept': '接受合同',
+  'contract.completed': '加急合同完成，奖金 +{reward}',
+  'contract.expired': '加急合同到期，可接受下一份合同。',
 
   // 检视器
   'insp.empty': '未选中任何对象',
@@ -208,6 +214,8 @@ const zh = {
   'toast.noSave': '没有找到存档',
   'toast.loaded': '📂 存档已读取',
   'toast.parseFail': '存档解析失败',
+  'toast.recovered': '已从上一份浏览器存档恢复',
+  'toast.localSaveInvalid': '无法读取浏览器存档。已暂停自动保存，可导入备份或手动保存当前工厂。',
   'toast.exportedFile': '📤 已导出存档文件',
   'toast.imported': '📥 存档已导入',
   'toast.orderDone': '<b>订单 {n} 完成</b> — 交付 {t} 件{item}，奖金 <b style="color:var(--ok)">+{r}</b>',
@@ -377,6 +385,12 @@ const en: Record<TKey, string> = {
   // Orders panel
   'order.no': 'Order No. {n}',
   'order.note': 'Deliver {item} to an export terminal to claim the bonus. Orders chain on automatically and keep getting bigger.',
+  'contract.title': 'Rush contract',
+  'contract.timer': '{seconds} s of simulation time',
+  'contract.offer': 'Only shipments after acceptance count. Time limit is {timer}.',
+  'contract.accept': 'Accept contract',
+  'contract.completed': 'Rush contract complete. Bonus +{reward}',
+  'contract.expired': 'Rush contract expired. The next contract is available.',
 
   // Inspector
   'insp.empty': 'Nothing selected',
@@ -476,6 +490,8 @@ const en: Record<TKey, string> = {
   'toast.noSave': 'No save found',
   'toast.loaded': '📂 Save loaded',
   'toast.parseFail': 'Could not parse the save file',
+  'toast.recovered': 'Recovered the previous browser save',
+  'toast.localSaveInvalid': 'Browser saves could not be read. Autosave is paused. Import a backup or manually save your current factory.',
   'toast.exportedFile': '📤 Save file exported',
   'toast.imported': '📥 Save imported',
   'toast.orderDone': '<b>Order {n} delivered</b> — {t} × {item} shipped, bonus <b style="color:var(--ok)">+{r}</b>',

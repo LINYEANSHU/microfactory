@@ -63,6 +63,7 @@ export class FactoryView {
   private tmpS = new THREE.Vector3(1, 1, 1);
   // 每帧复用的临时对象（避免 GC 压力）
   private itemCounts = new Map<ItemKey, number>();
+  private itemsDirty = true;
   private beltPosScratch: BeltWorldResult = { x: 0, z: 0, yaw: 0 };
   private ndcScratch = new THREE.Vector2();
   private planeHitScratch = new THREE.Vector3();
@@ -121,6 +122,7 @@ export class FactoryView {
 
   // ---------------- 结构变更 ----------------
   onPlaced(ent: Ent) {
+    this.itemsDirty = true;
     if (ent.kind === 'belt' || ent.kind === 'turbo') { this.beltsDirty = true; return; }
     const v = buildMachine(ent.kind);
     v.group.position.set(cellX(ent.x), 0, cellZ(ent.y));
@@ -163,6 +165,7 @@ export class FactoryView {
   }
 
   onRemoved(ent: Ent) {
+    this.itemsDirty = true;
     if (ent.kind === 'belt' || ent.kind === 'turbo') { this.beltsDirty = true; return; }
     this.pipsByEnt.delete(ent.id);
     const v = this.views.get(ent.id);
@@ -175,6 +178,7 @@ export class FactoryView {
   }
 
   onRotated(ent: Ent) {
+    this.itemsDirty = true;
     if (ent.kind === 'belt' || ent.kind === 'turbo') { this.beltsDirty = true; return; }
     const v = this.views.get(ent.id);
     if (v) v.group.rotation.y = dirAngle(ent.rot);
@@ -200,6 +204,7 @@ export class FactoryView {
   }
 
   rebuildAll() {
+    this.itemsDirty = true;
     this.reset();
     for (const e of [...this.sim.procs, ...this.sim.nodes, ...this.sim.terminals]) this.onPlaced(e);
     this.beltsDirty = true;
@@ -297,7 +302,10 @@ export class FactoryView {
       const v = this.views.get(e.id);
       if (v) v.update(dt, simTime, e);
     }
-    this.syncItems(simTime);
+    if (dt > 0 || this.itemsDirty) {
+      this.syncItems(simTime);
+      this.itemsDirty = false;
+    }
 
     // 选中环动画
     if (this.selRing.visible) {

@@ -11,6 +11,16 @@ import {
 } from '../core/defs';
 
 const POOL_PER_TYPE = 6; // 输入池中同种物品的上限
+const RUSH_CONTRACTS = [
+  { item: 'robot', target: 6, duration: 180, reward: 330 },
+  { item: 'gear', target: 18, duration: 120, reward: 280 },
+  { item: 'circuit', target: 12, duration: 150, reward: 420 },
+] as const;
+
+interface ContractRun {
+  base: number;
+  deadline: number;
+}
 
 // 提取器配方（按矿种共享的常量对象）：每台采矿机每 2 秒完成一次提取，
 // 若每次 new 会造成持续的小对象分配；配方只读不写，可安全共享。
@@ -71,6 +81,7 @@ export interface SaveData {
   credits?: number;
   orderIdx?: number;
   orderBase?: number;
+  contract?: { index: number; active: ContractRun | null };
   // 历史曲线采样点 [t, credits, totalExported]，10 秒一个点（可选，旧存档无此字段）
   hist?: Array<[number, number, number]>;
 }
@@ -101,9 +112,12 @@ export class Sim {
   credits = START_CREDITS;
   orderIdx = 0;
   orderBase = 0;
+  private contractIndex = 0;
+  private activeContract: ContractRun | null = null;
   onExport: ((ty: ItemKey, x: number, y: number) => void) | null = null;
   onProduce: ((ty: ItemKey) => void) | null = null;
   onOrderDone: ((orderIdx: number, reward: number, item: ItemKey, target: number) => void) | null = null;
+  onContractEnd: ((reward: number) => void) | null = null;
   private patches: Uint8Array; // 0 无 1 铁 2 铜
 
   constructor() {
@@ -289,6 +303,13 @@ export class Sim {
         t.active = 1;
         this.onExport?.(ty, t.x, t.y);
         this.checkOrder();
+        if (this.activeContract) {
+          const contract = RUSH_CONTRACTS[this.contractIndex % RUSH_CONTRACTS.length];
+          if (ty === contract.item && this.ledger.exported[ty] - this.activeContract.base >= contract.target) {
+            this.credits += contract.reward;
+            this.endContract(contract.reward);
+          }
+        }
         return true;
       }
       default: {
@@ -308,6 +329,7 @@ export class Sim {
   // ---------------- 主循环 ----------------
   tick(dt: number) {
     this.time += dt;
+    if (this.activeContract && this.time > this.activeContract.deadline) this.endContract(0);
     // 机器（先推输出，腾出空间）
     for (const e of this.procs) this.tickProc(e, dt);
     // 节点
@@ -496,6 +518,31 @@ export class Sim {
     return { idx: this.orderIdx, ...def, progress, remaining: Math.max(0, def.target - progress) };
   }
 
+  currentContract() {
+    const def = RUSH_CONTRACTS[this.contractIndex % RUSH_CONTRACTS.length];
+    const active = this.activeContract;
+    return {
+      ...def,
+      index: this.contractIndex,
+      active: !!active,
+      progress: active ? this.ledger.exported[def.item] - active.base : 0,
+      remainingSeconds: active ? Math.max(0, active.deadline - this.time) : def.duration,
+    };
+  }
+
+  acceptContract() {
+    if (this.activeContract) return false;
+    const def = RUSH_CONTRACTS[this.contractIndex % RUSH_CONTRACTS.length];
+    this.activeContract = { base: this.ledger.exported[def.item], deadline: this.time + def.duration };
+    return true;
+  }
+
+  private endContract(reward: number) {
+    this.activeContract = null;
+    this.contractIndex++;
+    this.onContractEnd?.(reward);
+  }
+
   private checkOrder() {
     let guard = 0;
     while (guard++ < 10) {
@@ -566,6 +613,7 @@ export class Sim {
       credits: this.credits,
       orderIdx: this.orderIdx,
       orderBase: this.orderBase,
+      contract: { index: this.contractIndex, active: this.activeContract },
       hist: this.hist.map(h => [h.t, h.credits, h.exported] as [number, number, number]),
     };
   }
@@ -617,6 +665,13 @@ export class Sim {
     this.credits = typeof data.credits === 'number' && Number.isFinite(data.credits) ? data.credits : START_CREDITS;
     this.orderIdx = Number.isInteger(data.orderIdx) && data.orderIdx! >= 0 ? data.orderIdx! : 0;
     this.orderBase = typeof data.orderBase === 'number' && Number.isFinite(data.orderBase) ? data.orderBase : this.ledger.exported[orderAt(this.orderIdx).item];
+    const contract = data.contract;
+    this.contractIndex = contract && Number.isSafeInteger(contract.index) && contract.index >= 0 ? contract.index : 0;
+    const active = contract?.active;
+    const def = RUSH_CONTRACTS[this.contractIndex % RUSH_CONTRACTS.length];
+    this.activeContract = active && Number.isFinite(active.deadline) && active.deadline >= this.time
+      && Number.isFinite(active.base) && active.base >= 0 && active.base <= this.ledger.exported[def.item]
+      ? { ...active } : null;
     // 历史曲线（旧存档无此字段 → 空数组重新采样）
     this.hist = (data.hist || []).map((h: [number, number, number]) => ({ t: h[0], credits: h[1], exported: h[2] }));
     this.histAcc = 0;
@@ -628,7 +683,7 @@ export class Sim {
       if (!Number.isInteger(s.x) || !Number.isInteger(s.y) || !Number.isInteger(s.r) || s.r < 0 || s.r > 3) {
         throw new Error(`Invalid entity placement at ${s?.x},${s?.y}`);
       }
-      this.insertEnt(s);
+      if (!this.insertEnt(s)) throw new Error(`Invalid entity placement at ${s.x},${s.y}`);
     }
     let maxId = 0;
     for (const c of this.cells) if (c && c.id > maxId) maxId = c.id;

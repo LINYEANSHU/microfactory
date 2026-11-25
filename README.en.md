@@ -75,7 +75,9 @@ Narrow layouts switch panels through “Build” and “Overview”; “More” 
 
 ## Saves and migration
 
-The game autosaves every 20 seconds to the active app or browser's `localStorage`. Manual saving is also available.
+Accept a rush contract in the Orders panel to earn a bonus for shipments made before its deadline. The contract clock stops when the game is paused.
+
+The game autosaves every 20 seconds and when the page is hidden. Manual saving is also available. Saves preserve the active contract, pause state, speed, and camera. If the latest browser save is damaged, the game tries the previous one.
 Use JSON export/import under “More” for backups or migration. Snapshots include a machine currently being moved.
 Imports load into an isolated simulation before replacing the active factory.
 

@@ -6,11 +6,58 @@ import { test } from 'vitest';
 import { Sim } from '../sim/engine';
 import { buildExample } from '../sim/example';
 import { ITEM_VALUE, START_CREDITS, MAX_LEVEL, orderAt } from '../core/defs';
+import { decodeFactorySave, loadFactorySave } from '../sim/save';
 
 const DT = 1 / 30;
 
 // 沿用原有用例名；vitest 逐项执行，断言抛错即该用例失败
 const ok = (name: string, fn: () => void) => test(name, fn);
+
+ok('rush shipments count from acceptance and pay once after restoring a live contract', () => {
+  const sim = new Sim();
+  sim.place('export', 6, 20, 0);
+  const item = sim.currentContract().item;
+  sim.tryPushTo(5, 20, 0, item);
+  assert.ok(sim.acceptContract());
+  assert.equal(sim.currentContract().progress, 0);
+  assert.equal(sim.acceptContract(), false);
+  sim.tryPushTo(5, 20, 0, item);
+  sim.tick(17);
+
+  const restored = decodeFactorySave(JSON.stringify({ sim: sim.serialize(), playback: { paused: true, speed: 2 } }));
+  assert.deepEqual(restored.playback, { paused: true, speed: 2 });
+  const contract = restored.sim.currentContract();
+  assert.equal(contract.progress, 1);
+  assert.equal(contract.remainingSeconds, contract.duration - 17);
+  const credits = restored.sim.credits;
+  for (let i = contract.progress; i < contract.target; i++) restored.sim.tryPushTo(5, 20, 0, item);
+  assert.equal(restored.sim.credits, credits + (contract.target - contract.progress) * ITEM_VALUE[item] + contract.reward);
+  assert.equal(restored.sim.currentContract().index, 1);
+});
+
+ok('expired contracts advance without awarding the shipment bonus', () => {
+  const sim = new Sim();
+  sim.place('export', 6, 20, 0);
+  const contract = sim.currentContract();
+  sim.acceptContract();
+  sim.tick(contract.duration + 1);
+  for (let i = 0; i < contract.target; i++) sim.tryPushTo(5, 20, 0, contract.item);
+  assert.equal(sim.credits, START_CREDITS + contract.target * ITEM_VALUE[contract.item]);
+  assert.equal(sim.currentContract().index, 1);
+});
+
+ok('damaged primary uses an existing compatible backup without changing either slot', () => {
+  const sim = new Sim();
+  sim.place('export', 6, 20, 0);
+  const valid = JSON.stringify(sim.serialize());
+  const duplicate = JSON.stringify({ ...sim.serialize(), ents: [sim.serialize().ents[0], sim.serialize().ents[0]] });
+  const slots = new Map([['microfactory.save.v1', duplicate], ['microfactory.save.backup.v1', valid]]);
+  const result = loadFactorySave({ getItem: (key) => slots.get(key) ?? null });
+  assert.equal(result?.recovered, true);
+  assert.equal(result?.sim.get(6, 20)?.kind, 'export');
+  assert.equal(slots.get('microfactory.save.v1'), duplicate);
+  assert.throws(() => decodeFactorySave(duplicate));
+});
 
 // ------------------------------------------------------------
 ok('出货计价：每种物品按单价入账', () => {

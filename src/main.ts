@@ -5,13 +5,13 @@ import { World } from './render/world';
 import { FactoryView } from './render/view';
 import { Hud, Tool, goalName, goalDesc } from './ui/hud';
 import { SoundKit } from './ui/sound';
-import { Sim, Ent, SerEnt } from './sim/engine';
+import { Sim, Ent, SaveData, SerEnt } from './sim/engine';
+import { BACKUP_KEY, SAVE_KEY, decodeFactorySave, loadFactorySave } from './sim/save';
 import { buildExample } from './sim/example';
 import { EntKind, Dir, PALETTE_ORDER, GRID } from './core/defs';
 import { t, getLang, setLang, itemName, kindName } from './ui/i18n';
 
 const STEP = 1 / 30;
-const SAVE_KEY = 'microfactory.save.v1';
 const SPEEDS = [1, 2, 4];
 
 const container = document.getElementById('app')!;
@@ -34,6 +34,9 @@ let dragLast: { x: number; y: number } | null = null;
 let moving: { data: SerEnt; from: { x: number; y: number } } | null = null;
 let perfDetail = false;
 let welcomeOpen = false;
+let protectSave = false;
+let lastValidSave: string | undefined;
+let lastSavedState: string | undefined;
 
 // ---------------- HUD ----------------
 const uiRoot = document.createElement('div');
@@ -47,11 +50,17 @@ const hud = new Hud({
   },
   save: () => saveGame(true),
   load: () => loadGame(),
+  acceptContract: () => {
+    if (sim.acceptContract()) {
+      hud.refreshOrders(sim);
+      saveGame(false);
+    }
+  },
   exportFile: () => exportFile(),
   importFile: (f: File) => importFile(f),
   reset: () => hud.confirm(t('reset.title'), t('reset.msg'), t('reset.ok'), () => {
     clearSim();
-    saveGame(false);
+    saveGame(false, true);
     hud.toast(t('toast.reset'));
   }),
   example: () => {
@@ -83,6 +92,7 @@ const hud = new Hud({
     hud.rebuild();
     // 立即重绘动态面板，不等下一次刷新周期
     hud.refreshStats(sim);
+    hud.refreshOrders(sim);
     hud.refreshGoals(sim);
     refreshInspector();
   },
@@ -98,6 +108,10 @@ sim.onOrderDone = (idx, reward, item, target) => {
 };
 // 单件出货提示音（SoundKit 内部节流 70ms）
 sim.onExport = () => sound.play('export');
+sim.onContractEnd = (reward) => {
+  if (reward) sound.play('order');
+  hud.orderToast(reward ? t('contract.completed', { reward }) : t('contract.expired'));
+};
 
 /** 语言应用于文档标题与 <html lang> */
 function applyDocumentLang() {
@@ -364,45 +378,80 @@ function togglePause() {
 }
 
 // ---------------- 存读档 ----------------
-function emptySave() {
+function emptySave(): SaveData {
   return { v: 1, time: 0, ledger: { produced: {}, consumed: {}, exported: {}, destroyed: {} }, ents: [], goals: [] };
 }
 
-function saveGame(verbose: boolean) {
+function saveGame(verbose: boolean, replace = verbose) {
+  if (protectSave && !replace) return;
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify({ sim: snapshot(), ts: Date.now() }));
+    const data = saveData();
+    const state = JSON.stringify(data);
+    if (state !== lastSavedState || verbose) {
+      if (lastValidSave) {
+        try { localStorage.setItem(BACKUP_KEY, lastValidSave); } catch { /* A full store may still fit the primary. */ }
+      }
+      const raw = JSON.stringify({ ...data, ts: Date.now() });
+      localStorage.setItem(SAVE_KEY, raw);
+      lastValidSave = raw;
+      lastSavedState = state;
+    }
+    protectSave = false;
     if (verbose) hud.toast(t('toast.saved'));
   } catch (e) {
     if (verbose) hud.toast(t('toast.saveFail'), 'error-toast');
   }
 }
 
-function loadGame() {
+function loadGame(verbose = true) {
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) { hud.toast(t('toast.noSave'), 'error-toast'); return; }
-    applySave(JSON.parse(raw));
-    hud.toast(t('toast.loaded'));
-  } catch (e) {
-    hud.toast(t('toast.parseFail'), 'error-toast');
+    const save = loadFactorySave(localStorage);
+    if (!save) {
+      if (verbose) hud.toast(t('toast.noSave'), 'error-toast');
+      return false;
+    }
+    applySave(save);
+    lastValidSave = save.raw;
+    lastSavedState = undefined;
+    protectSave = false;
+    if (save.recovered || verbose) hud.toast(t(save.recovered ? 'toast.recovered' : 'toast.loaded'));
+    return true;
+  } catch {
+    protectSave = true;
+    hud.toast(t('toast.localSaveInvalid'), 'error-toast');
+    return false;
   }
 }
 
-function applySave(data: any) {
-  const payload = data?.sim ?? data;
-  if (!payload || !Array.isArray(payload.ents) || !payload.ledger || typeof payload.ledger !== 'object') throw new Error('Invalid save');
-  // Validate in an isolated simulation so a malformed import cannot clear the current factory.
-  const candidate = new Sim();
-  candidate.load(payload);
-  sim.load(candidate.serialize());
+function applySave(save: ReturnType<typeof decodeFactorySave>) {
+  sim.load(save.sim.serialize());
+  paused = save.playback.paused;
+  speedIdx = save.playback.speed;
+  acc = 0;
+  if (save.camera) {
+    world.camera.position.fromArray(save.camera.position);
+    world.controls.target.fromArray(save.camera.target);
+    world.controls.update();
+  }
+  hud.setSpeedBtn(paused ? 0 : speedIdx + 1);
   view.rebuildAll();
-  select(null);
-  if (moving) moving = null;
-  view.setGhost(null, 0, true);
+  moving = null;
+  switchTool('pointer');
+  hud.refreshOrders(sim);
+  hud.refreshStats(sim);
+  hud.refreshGoals(sim);
+}
+
+function saveData() {
+  return {
+    sim: snapshot(),
+    playback: { paused, speed: speedIdx },
+    camera: { position: world.camera.position.toArray(), target: world.controls.target.toArray() },
+  };
 }
 
 function exportFile() {
-  const blob = new Blob([JSON.stringify({ sim: snapshot(), ts: Date.now() }, null, 1)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ ...saveData(), ts: Date.now() }, null, 1)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'microfactory-save.json';
@@ -414,7 +463,8 @@ function exportFile() {
 function importFile(f: File) {
   f.text().then(txt => {
     try {
-      applySave(JSON.parse(txt));
+      applySave(decodeFactorySave(txt));
+      if (protectSave) saveGame(false, true);
       hud.toast(t('toast.imported'));
     } catch { hud.toast(t('toast.parseFail'), 'error-toast'); }
   }).catch(() => hud.toast(t('toast.parseFail'), 'error-toast'));
@@ -428,7 +478,7 @@ function snapshot() {
 }
 
 function clearSim() {
-  sim.load(emptySave() as any);
+  sim.load(emptySave());
   view.rebuildAll();
   select(null);
   moving = null;
@@ -439,8 +489,11 @@ function clearSim() {
 setInterval(() => {
   if (!welcomeOpen) saveGame(false);
 }, 20000);
-window.addEventListener('beforeunload', () => {
+window.addEventListener('pagehide', () => {
   if (!welcomeOpen) saveGame(false);
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && !welcomeOpen) saveGame(false);
 });
 
 // ---------------- 性能统计 ----------------
@@ -558,11 +611,7 @@ function frame(now: number) {
 }
 
 // ---------------- 启动 ----------------
-let hasSave = false;
-try {
-  const raw = localStorage.getItem(SAVE_KEY);
-  if (raw) { applySave(JSON.parse(raw)); hasSave = true; }
-} catch { /* Unavailable storage or damaged data starts a fresh factory. */ }
+const hasSave = loadGame(false);
 hud.setTool('pointer');
 hud.refreshStats(sim);
 hud.refreshGoals(sim);

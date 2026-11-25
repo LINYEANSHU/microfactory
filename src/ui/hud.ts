@@ -19,6 +19,7 @@ export interface HudHooks {
   setTool(t: Tool): void;
   setSpeed(idx: number): void;
   save(): void; load(): void;
+  acceptContract(): void;
   exportFile(): void; importFile(f: File): void;
   reset(): void; example(): void; help(): void;
   rotate(): void; move(): void; remove(): void;
@@ -180,6 +181,9 @@ export class Hud {
     this.modalBack = document.getElementById('modal-back')!;
     this.modalEl = document.getElementById('modal')!;
     this.ordersBody = document.getElementById('orders-body')!;
+    this.ordersBody.addEventListener('click', event => {
+      if (event.target instanceof Element && event.target.closest('#accept-contract')) this.hooks.acceptContract();
+    });
     this.ordersSec = document.getElementById('orders')!;
     this.inspectorBody = document.getElementById('inspector-body')!;
     this.statsBody = document.getElementById('stats-body')!;
@@ -392,7 +396,9 @@ export class Hud {
   // ---------------- 订单面板 ----------------
   refreshOrders(sim: Sim) {
     const o = sim.currentOrder();
+    const contract = sim.currentContract();
     const pct = Math.min(100, (o.progress / o.target) * 100);
+    const timer = t('contract.timer', { seconds: Math.ceil(contract.remainingSeconds) });
     const body = `
       <div class="order-head">${icon('bot')}<span class="order-title">${t('order.no', { n: o.idx + 1 })}</span>
         <span class="order-reward">${icon('coin')} +${money(o.reward)}</span></div>
@@ -402,6 +408,16 @@ export class Hud {
       </div>
       <div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div>
       <div class="order-note">${t('order.note', { item: itemName(o.item) })}</div>
+      <div class="rush-contract">
+        <div class="order-head">${icon('clock')}<span class="order-title">${t('contract.title')}</span>
+          <span class="order-reward">${icon('coin')} +${money(contract.reward)}</span></div>
+        <div class="order-item">
+          <span>${itemChip(contract.item)}</span>
+          <span class="num"><b>${contract.progress}</b><span class="of"> / ${contract.target}</span></span>
+        </div>
+        <div class="order-note">${contract.active ? timer : t('contract.offer', { timer })}</div>
+        ${contract.active ? '' : `<button type="button" class="btn" id="accept-contract">${t('contract.accept')}</button>`}
+      </div>
     `;
     if (body !== this.lastOrdersHtml) {
       this.lastOrdersHtml = body;

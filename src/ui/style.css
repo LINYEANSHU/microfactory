@@ -244,6 +244,8 @@ html, body {
 .order-item .of { color: var(--ink-dim); font-size: 12px; }
 .order-reward { margin-left: auto; font-family: var(--font-num); font-weight: 600; font-size: 14px; color: var(--ok); font-variant-numeric: tabular-nums; }
 .order-note { font-size: 11px; color: var(--ink-dim); margin-top: 6px; line-height: 1.45; }
+.rush-contract { border-top: 1px solid var(--ground-3); margin-top: 10px; padding-top: 10px; }
+.rush-contract .btn { margin-top: 6px; }
 
 /* 通用小件 */
 .bar { height: 6px; border-radius: 3px; background: var(--ground-3); overflow: hidden; margin: 4px 0; }
