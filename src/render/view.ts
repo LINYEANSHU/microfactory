@@ -28,7 +28,7 @@ function robotGeometry(): THREE.BufferGeometry {
   return merged;
 }
 
-const ITEM_VIS: Record<ItemKey, () => ItemVisual> = {
+const ITEM_VIS: Partial<Record<ItemKey, () => ItemVisual>> = {
   iron_ore: () => ({ geo: new THREE.DodecahedronGeometry(0.095, 0), y: 0.185, spin: true, mat: M(ITEMS.iron_ore.color, { flat: true, rough: 0.9 }) }),
   copper_ore: () => ({ geo: new THREE.DodecahedronGeometry(0.095, 0), y: 0.185, spin: true, mat: M(ITEMS.copper_ore.color, { flat: true, rough: 0.9 }) }),
   iron_ingot: () => ({ geo: new THREE.BoxGeometry(0.2, 0.08, 0.12), y: 0.15, spin: false, mat: M(ITEMS.iron_ingot.color, { metal: 0.35, rough: 0.45 }) }),
@@ -38,6 +38,17 @@ const ITEM_VIS: Record<ItemKey, () => ItemVisual> = {
   circuit: () => ({ geo: new THREE.BoxGeometry(0.17, 0.035, 0.13), y: 0.15, spin: false, mat: M(ITEMS.circuit.color, { rough: 0.6 }) }),
   robot: () => ({ geo: robotGeometry(), y: 0.155, spin: false, mat: M(ITEMS.robot.color, { rough: 0.55 }) }),
 };
+
+function itemVisual(item: ItemKey): ItemVisual {
+  const special = ITEM_VIS[item];
+  if (special) return special();
+  const ore = item === 'cobalt_ore' || item === 'silica' || item === 'slag' || item === 'biomineral';
+  const canister = item === 'reagent' || item === 'bioculture' || item === 'orbital_payload';
+  const geo = ore ? new THREE.DodecahedronGeometry(0.095, 0)
+    : canister ? new THREE.CylinderGeometry(0.068, 0.068, 0.16, 8).rotateZ(Math.PI / 2)
+      : new THREE.BoxGeometry(0.19, 0.075, 0.13);
+  return { geo, y: 0.16, spin: ore, mat: M(ITEMS[item].color, { flat: ore, rough: 0.6 }) };
+}
 
 const MAX_INST = 2000;
 
@@ -90,7 +101,7 @@ export class FactoryView {
     this.turboSurfMat = new THREE.MeshStandardMaterial({ map: makeBeltTexture(true), roughness: 0.85, emissive: 0x0e2a30, emissiveIntensity: 0.8 });
     // 物品实例（几何/材质仅构建一次）
     for (const ty of ITEM_ORDER) {
-      const v = ITEM_VIS[ty]();
+      const v = itemVisual(ty);
       this.itemVis.set(ty, v);
       const im = new THREE.InstancedMesh(v.geo, v.mat, MAX_INST);
       im.count = 0;
@@ -206,7 +217,7 @@ export class FactoryView {
   rebuildAll() {
     this.itemsDirty = true;
     this.reset();
-    for (const e of [...this.sim.procs, ...this.sim.nodes, ...this.sim.terminals]) this.onPlaced(e);
+    for (const e of [...this.sim.procs, ...this.sim.nodes, ...this.sim.terminals, ...this.sim.generators]) this.onPlaced(e);
     this.beltsDirty = true;
   }
 
@@ -298,6 +309,7 @@ export class FactoryView {
       const v = this.views.get(e.id);
       if (v) v.update(dt, simTime, e);
     }
+    for (const e of this.sim.generators) this.views.get(e.id)?.update(dt, simTime, e);
     for (const e of this.sim.terminals) {
       const v = this.views.get(e.id);
       if (v) v.update(dt, simTime, e);
@@ -330,7 +342,7 @@ export class FactoryView {
     for (const n of this.sim.nodes) {
       const wx = cellX(n.x), wz = cellZ(n.y);
       const q = n.queue!;
-      for (let i = 0; i < q.length; i++) {
+      for (let i = 0; i < Math.min(q.length, 10); i++) {
         this.putItem(counts, q[i], wx, 0.02 + i * 0.05, wz, dirAngle(n.rot), i * 1.7, simTime);
       }
     }
@@ -510,7 +522,7 @@ export class FactoryView {
     if (!this.raycaster.ray.intersectPlane(this.pickPlane, p)) return null;
     const cx = Math.round(p.x + (GRID - 1) / 2);
     const cy = Math.round(p.z + (GRID - 1) / 2);
-    if (cx < 0 || cy < 0 || cx >= GRID || cy >= GRID) return null;
+    if (!this.sim.inBounds(cx, cy)) return null;
     return { x: cx, y: cy };
   }
 
@@ -524,7 +536,8 @@ export class FactoryView {
         if (o.userData && o.userData.entId !== undefined) {
           const ent = this.sim.procs.find(e => e.id === o!.userData.entId)
             || this.sim.nodes.find(e => e.id === o!.userData.entId)
-            || this.sim.terminals.find(e => e.id === o!.userData.entId);
+            || this.sim.terminals.find(e => e.id === o!.userData.entId)
+            || this.sim.generators.find(e => e.id === o!.userData.entId);
           if (ent) return ent;
         }
         o = o.parent;

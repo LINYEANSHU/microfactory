@@ -4,7 +4,9 @@
 
 export type ItemKey =
   | 'iron_ore' | 'copper_ore' | 'iron_ingot' | 'copper_ingot'
-  | 'gear' | 'wire' | 'circuit' | 'robot';
+  | 'gear' | 'wire' | 'circuit' | 'robot' | 'cobalt_ore' | 'silica' | 'biomineral'
+  | 'alloy' | 'glass' | 'slag' | 'reagent' | 'composite' | 'bioculture'
+  | 'survey_probe' | 'orbital_payload' | 'automation_core' | 'dispatch_unit';
 
 export interface ItemDef {
   name: string;
@@ -20,12 +22,22 @@ export const ITEMS: Record<ItemKey, ItemDef> = {
   wire:         { name: '铜线',   color: 0xf0a35e },
   circuit:      { name: '电路板', color: 0x58c470 },
   robot:        { name: '微型机器人', color: 0xffb03b },
+  cobalt_ore:   { name: '钴矿石', color: 0x6c96e5 },
+  silica:      { name: '硅砂', color: 0xe3d6a4 },
+  biomineral:  { name: '生物矿晶', color: 0x7cd4b8 },
+  alloy:       { name: '钴合金', color: 0x719ee1 },
+  glass:       { name: '高纯玻璃', color: 0xa4dfed },
+  slag:        { name: '炉渣', color: 0x9d715b },
+  reagent:     { name: '矿晶试剂', color: 0xbb90de },
+  composite:   { name: '复合材料', color: 0xb6afcb },
+  bioculture:  { name: '培育基质', color: 0x98cd78 },
+  survey_probe: { name: '测绘探针', color: 0x5ddbe3 },
+  orbital_payload: { name: '轨道载荷', color: 0xf3d88b },
+  automation_core: { name: '自动化核心', color: 0xfa9e70 },
+  dispatch_unit: { name: '调度单元', color: 0xe3b5f6 },
 };
 
-export const ITEM_ORDER: ItemKey[] = [
-  'iron_ore', 'copper_ore', 'iron_ingot', 'copper_ingot',
-  'gear', 'wire', 'circuit', 'robot',
-];
+export const ITEM_ORDER = Object.keys(ITEMS) as ItemKey[];
 
 // ---------------- 网格与方向 ----------------
 // rot: 0=东(+x) 1=南(+y) 2=西(-x) 3=北(-y)，与世界轴一致（grid y → world z）
@@ -70,7 +82,11 @@ export const EXTRACT_OUT_CAP = 4;  // 采矿机输出缓存
 // ---------------- 建筑定义 ----------------
 export type EntKind =
   | 'belt' | 'turbo' | 'splitter' | 'merger' | 'storage'
-  | 'extractor' | 'furnace' | 'press' | 'assembler' | 'recycler' | 'export';
+  | 'extractor' | RecipeMachine | 'export' | 'generator'
+  | 'sorter' | 'freight_send' | 'freight_receive';
+
+export type RecipeMachine = 'furnace' | 'press' | 'assembler' | 'recycler'
+  | 'refinery' | 'chemistry' | 'cultivator' | 'advanced_assembler';
 
 export interface EntDef {
   kind: EntKind;
@@ -138,7 +154,58 @@ export const DEFS: Record<EntKind, EntDef> = {
     desc: '任何物品进入即计为出货，四向接收。',
     inputs: [0, 1, 2, 3], outputs: [],
   },
+  generator: {
+    kind: 'generator', name: '潮流发电机', cat: 'production',
+    desc: '给所在区域提供 14 电力，其他区域需要独立发电。',
+    inputs: [], outputs: [],
+  },
+  refinery: {
+    kind: 'refinery', name: '精炼炉', cat: 'production',
+    desc: '消耗 4 电力。钴矿产合金和炉渣，硅砂产玻璃。',
+    inputs: [BACK], outputs: [FRONT],
+  },
+  chemistry: {
+    kind: 'chemistry', name: '化工塔', cat: 'production',
+    desc: '消耗 3 电力。矿晶制试剂，合金与试剂制复合材料。',
+    inputs: [BACK, LEFT], outputs: [FRONT],
+  },
+  cultivator: {
+    kind: 'cultivator', name: '生态培养站', cat: 'production',
+    desc: '在裸露的修复位使用矿晶和炉渣。消耗 3 电力，修复地表并持续输出培育基质。',
+    inputs: [BACK, LEFT], outputs: [FRONT],
+  },
+  advanced_assembler: {
+    kind: 'advanced_assembler', name: '精密装配机', cat: 'production',
+    desc: '消耗 4 电力。先选配方，三向输入可制造科研或企业设备。',
+    inputs: [BACK, LEFT, RIGHT], outputs: [FRONT],
+  },
+  sorter: {
+    kind: 'sorter', name: '筛分器', cat: 'logistics',
+    desc: '从背面进料。匹配筛选项的物品向前输出，其余向右输出。',
+    inputs: [BACK], outputs: [FRONT, RIGHT],
+  },
+  freight_send: {
+    kind: 'freight_send', name: '货运发站', cat: 'logistics',
+    desc: '与外区同频道收站连接。每 1.5 秒可发送一件物品。',
+    inputs: [BACK], outputs: [],
+  },
+  freight_receive: {
+    kind: 'freight_receive', name: '货运收站', cat: 'logistics',
+    desc: '缓存同频道外区发站的货物，向前输出。',
+    inputs: [], outputs: [FRONT],
+  },
 };
+
+export const POWER_SUPPLY = 14;
+export const POWER_USE: Partial<Record<EntKind, number>> = {
+  refinery: 4, chemistry: 3, cultivator: 3, advanced_assembler: 4,
+};
+export const FRONTIER_TOOLS: EntKind[] = [
+  'generator', 'refinery', 'chemistry', 'cultivator', 'advanced_assembler',
+  'sorter', 'freight_send', 'freight_receive',
+];
+export const FREIGHT_SECONDS = 1.5;
+export const FREIGHT_CHANNELS = 4;
 
 export const PALETTE_ORDER: EntKind[] = [
   'belt', 'turbo', 'splitter', 'merger', 'storage',
@@ -148,7 +215,7 @@ export const PALETTE_ORDER: EntKind[] = [
 // ---------------- 配方 ----------------
 export interface Recipe {
   id: string;
-  machine: 'furnace' | 'press' | 'assembler' | 'recycler';
+  machine: RecipeMachine;
   inputs: Partial<Record<ItemKey, number>>;
   outputs: Partial<Record<ItemKey, number>>;
   time: number;
@@ -166,12 +233,21 @@ export const RECIPES: Recipe[] = [
   { id: 'recycle_wire',   machine: 'recycler', inputs: { wire: 2 },   outputs: { copper_ingot: 1 },           time: 3 },
   { id: 'recycle_circuit',machine: 'recycler', inputs: { circuit: 1 },outputs: { iron_ingot: 1, copper_ingot: 1 }, time: 5 },
   { id: 'recycle_robot',  machine: 'recycler', inputs: { robot: 1 },  outputs: { iron_ingot: 2, copper_ingot: 1 }, time: 6 },
+  { id: 'refine_cobalt', machine: 'refinery', inputs: { cobalt_ore: 1 }, outputs: { alloy: 1, slag: 1 }, time: 3.2 },
+  { id: 'refine_glass', machine: 'refinery', inputs: { silica: 1 }, outputs: { glass: 2 }, time: 3.5 },
+  { id: 'chem_reagent', machine: 'chemistry', inputs: { biomineral: 1 }, outputs: { reagent: 1 }, time: 3.5 },
+  { id: 'chem_composite', machine: 'chemistry', inputs: { alloy: 1, reagent: 1 }, outputs: { composite: 1 }, time: 4 },
+  { id: 'restore_bed', machine: 'cultivator', inputs: { slag: 1, biomineral: 1 }, outputs: { bioculture: 1 }, time: 5 },
+  { id: 'asm_probe', machine: 'advanced_assembler', inputs: { composite: 1, glass: 1, bioculture: 1 }, outputs: { survey_probe: 1 }, time: 5 },
+  { id: 'asm_payload', machine: 'advanced_assembler', inputs: { survey_probe: 1, alloy: 1, bioculture: 1 }, outputs: { orbital_payload: 1 }, time: 7 },
+  { id: 'asm_core', machine: 'advanced_assembler', inputs: { composite: 1, glass: 1, robot: 1 }, outputs: { automation_core: 1 }, time: 5 },
+  { id: 'asm_dispatch', machine: 'advanced_assembler', inputs: { automation_core: 1, wire: 2, bioculture: 1 }, outputs: { dispatch_unit: 1 }, time: 6 },
 ];
 
 // 按机型缓存配方列表（热路径：tickProc 每帧对缺料机器都会查询，
 // filter 每次都会分配新数组，这里做记忆化；调用方只读不修改返回数组）
 const _recipesByKind = new Map<string, Recipe[]>();
-export function recipesFor(kind: 'furnace' | 'press' | 'assembler' | 'recycler'): Recipe[] {
+export function recipesFor(kind: EntKind): Recipe[] {
   let r = _recipesByKind.get(kind);
   if (!r) {
     r = RECIPES.filter(x => x.machine === kind);
@@ -190,13 +266,16 @@ export function recipeById(id: string): Recipe | null {
 }
 
 // ---------------- 矿脉 ----------------
-export interface PatchRect { x0: number; y0: number; x1: number; y1: number; ore: 'iron' | 'copper' }
+export type Ore = 'iron' | 'copper' | 'cobalt' | 'silica' | 'biomineral';
+export interface PatchRect { x0: number; y0: number; x1: number; y1: number; ore: Ore }
 export const PATCHES: PatchRect[] = [
   { x0: 4,  y0: 27, x1: 7,  y1: 29, ore: 'iron' },
   { x0: 10, y0: 27, x1: 12, y1: 29, ore: 'iron' },
   { x0: 24, y0: 27, x1: 26, y1: 29, ore: 'copper' },
 ];
-export const ORE_ITEM: Record<'iron' | 'copper', ItemKey> = { iron: 'iron_ore', copper: 'copper_ore' };
+export const ORE_ITEM: Record<Ore, ItemKey> = {
+  iron: 'iron_ore', copper: 'copper_ore', cobalt: 'cobalt_ore', silica: 'silica', biomineral: 'biomineral',
+};
 
 // ---------------- 传送带上物品的局部路径 ----------------
 // 局部坐标系：格中心为原点，+x 为传送带朝向；entry: 0=直线(从背面进入) 1=从右侧切入 2=从左侧切入
@@ -264,6 +343,9 @@ export const ITEM_VALUE: Record<ItemKey, number> = {
   iron_ore: 0, copper_ore: 0,
   iron_ingot: 2, copper_ingot: 2,
   gear: 6, wire: 3, circuit: 15, robot: 45,
+  cobalt_ore: 0, silica: 0, biomineral: 0,
+  alloy: 8, glass: 5, slag: 1, reagent: 7, composite: 22, bioculture: 8,
+  survey_probe: 55, orbital_payload: 120, automation_core: 95, dispatch_unit: 150,
 };
 
 // 机器升级：等级 1-3，配方速度 = time / SPEED_DIV[level-1]
@@ -276,6 +358,7 @@ export const UPGRADE_COST: Partial<Record<EntKind, [number, number]>> = {
   press: [90, 220],
   assembler: [150, 360],
   recycler: [100, 240],
+  refinery: [110, 280], chemistry: [110, 280], cultivator: [100, 240], advanced_assembler: [180, 400],
 };
 export const START_CREDITS = 120;
 

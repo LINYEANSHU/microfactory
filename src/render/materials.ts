@@ -2,7 +2,8 @@
 // MicroFactory · 材质与纹理（缓存共享，控制 draw material 数量）
 // ============================================================
 import * as THREE from 'three';
-import { PATCHES, GRID, DIRS } from '../core/defs';
+import { PATCHES, GRID, DIRS, type Ore } from '../core/defs';
+import type { Region } from '../sim/regions';
 
 const matCache = new Map<string, THREE.MeshStandardMaterial>();
 
@@ -66,38 +67,47 @@ export function makeBeltTexture(turbo: boolean): THREE.CanvasTexture {
 }
 
 // ---------------- 地面纹理（草地 + 网格 + 矿脉） ----------------
-export function makeGroundTexture(): THREE.CanvasTexture {
+export function makeGroundTexture(region?: Region, seed = 0): THREE.CanvasTexture {
   const S = 1024;
   const cell = S / GRID; // 32px
   const c = document.createElement('canvas');
   c.width = S; c.height = S;
   const g = c.getContext('2d')!;
 
-  g.fillStyle = '#8fb868';
+  let noise = (seed ^ Math.imul((region?.x ?? 0) + (region?.y ?? 0) * 37, 311)) >>> 0;
+  const random = () => {
+    noise = (Math.imul(noise, 1664525) + 1013904223) >>> 0;
+    return noise / 2 ** 32;
+  };
+  const landColors = { harbor: '#8fb868', fernwash: '#76a278', glassfen: '#9bb794', skyreach: '#a5aca4' };
+  g.fillStyle = landColors[region?.id ?? 'harbor'];
   g.fillRect(0, 0, S, S);
   // 草地噪点
   for (let i = 0; i < 900; i++) {
-    const x = Math.random() * S, y = Math.random() * S, r = 4 + Math.random() * 14;
-    g.fillStyle = Math.random() < 0.5 ? 'rgba(255,255,240,0.05)' : 'rgba(30,60,20,0.06)';
+    const x = random() * S, y = random() * S, r = 4 + random() * 14;
+    g.fillStyle = random() < 0.5 ? 'rgba(255,255,240,0.05)' : 'rgba(30,60,20,0.06)';
     g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
   }
   // 矿脉
-  const oreStyle: Record<string, [string, string]> = {
+  const oreStyle: Record<Ore, [string, string]> = {
     iron: ['rgba(176,113,79,0.55)', 'rgba(90,50,30,0.5)'],
     copper: ['rgba(53,160,140,0.5)', 'rgba(20,80,66,0.55)'],
+    cobalt: ['#5a79ad', '#b0cbf5'],
+    silica: ['#e2c995', '#f8efc3'],
+    biomineral: ['#4f8c85', '#91dccc'],
   };
-  for (const p of PATCHES) {
+  for (const p of region?.patches ?? PATCHES) {
     const [fill, dot] = oreStyle[p.ore];
-    const x0 = p.x0 * cell, y0 = p.y0 * cell;
+    const x0 = (p.x0 - (region?.x ?? 0)) * cell, y0 = (p.y0 - (region?.y ?? 0)) * cell;
     const w = (p.x1 - p.x0 + 1) * cell, h = (p.y1 - p.y0 + 1) * cell;
     g.fillStyle = fill;
     g.beginPath();
     g.roundRect(x0 + 2, y0 + 2, w - 4, h - 4, 10);
     g.fill();
     for (let i = 0; i < 60; i++) {
-      const x = x0 + 6 + Math.random() * (w - 12), y = y0 + 6 + Math.random() * (h - 12);
+      const x = x0 + 6 + random() * (w - 12), y = y0 + 6 + random() * (h - 12);
       g.fillStyle = dot;
-      g.beginPath(); g.arc(x, y, 1.5 + Math.random() * 3, 0, 7); g.fill();
+      g.beginPath(); g.arc(x, y, 1.5 + random() * 3, 0, 7); g.fill();
     }
   }
   // 网格线

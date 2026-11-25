@@ -5,9 +5,10 @@
 // ============================================================
 import { Sim, Ent } from '../sim/engine';
 import {
-  ITEMS, ITEM_ORDER, ItemKey, EntKind, DEFS, PALETTE_ORDER, recipesFor,
-  UPGRADE_COST,
+  ITEMS, ITEM_ORDER, ItemKey, EntKind, DEFS, PALETTE_ORDER, ORE_ITEM,
+  UPGRADE_COST, FRONTIER_TOOLS, POWER_USE, FREIGHT_CHANNELS, NODE_QUEUE_MAX, STORAGE_CAP,
 } from '../core/defs';
+import { DEFAULT_SEED, REGIONS, REGION_IDS, regionIdAt, type CampaignMode, type RegionId } from '../sim/regions';
 import { renderIcons } from '../render/icons';
 import {
   t, TKey, itemName, kindName, kindDesc, dirName, stateLabel,
@@ -20,6 +21,10 @@ export interface HudHooks {
   setSpeed(idx: number): void;
   save(): void; load(): void;
   acceptContract(): void;
+  chooseCampaign(mode: CampaignMode, seed: number): void;
+  selectRegion(id: RegionId): void;
+  advanceCampaign(): void;
+  configure(key: 'filter' | 'channel' | 'recipe', value: string): void;
   exportFile(): void; importFile(f: File): void;
   reset(): void; example(): void; help(): void;
   rotate(): void; move(): void; remove(): void;
@@ -84,6 +89,7 @@ export const goalDesc = (id: string) => t(`goal.${id}.desc` as TKey);
 const itemChip = (ty: ItemKey, n?: number) =>
   `<span class="item-dot" style="background:#${ITEMS[ty].color.toString(16).padStart(6, '0')}"></span>${itemName(ty)}${n && n > 1 ? ` ×${n}` : ''}`;
 const money = (n: number) => n.toLocaleString('en-US');
+export const regionName = (id: RegionId) => t(`frontier.${id}`);
 
 export class Hud {
   root: HTMLElement;
@@ -95,6 +101,9 @@ export class Hud {
   private toolBtns = new Map<string, HTMLElement>();
   private ordersSec!: HTMLElement;
   private ordersBody!: HTMLElement;
+  private frontierSec!: HTMLElement;
+  private frontierBody!: HTMLElement;
+  private lastFrontierHtml = '';
   private inspectorSec!: HTMLElement;
   private inspectorBody!: HTMLElement;
   private statsSec!: HTMLElement;
@@ -118,6 +127,7 @@ export class Hud {
   private curSpeed = 1;
   private curSound = true;
   private icons: Record<EntKind, string> | null = null; // 3D 图标缓存（避免重建面板时重复离屏渲染）
+  private frontierIcons: Record<EntKind, string> | null = null;
   private modalReturnFocus: HTMLElement | null = null;
   private toolbarObserver = new ResizeObserver(() => {
     const bar = document.getElementById('topbar');
@@ -163,6 +173,7 @@ export class Hud {
       </div>
       <div id="palette" class="panel"></div>
       <div id="side">
+        <section id="frontier" class="panel"><h3>${icon('target')}${t('frontier.title')}<span class="after"></span><span class="chev"></span></h3><div class="sec-body" id="frontier-body"></div></section>
         <section id="orders" class="panel"><h3>${icon('bot')}${t('sec.orders')}<span class="after"></span></h3><div class="sec-body" id="orders-body"></div></section>
         <section id="inspector" class="panel"><h3>${icon('cursor')}${t('sec.inspector')}<span class="after"></span><span class="chev"></span></h3><div class="sec-body" id="inspector-body"></div></section>
         <section id="stats" class="panel collapsed"><h3>${icon('chart')}${t('sec.stats')}<span class="after"></span><span class="chev"></span></h3><div class="sec-body" id="stats-body"></div></section>
@@ -185,7 +196,27 @@ export class Hud {
       if (event.target instanceof Element && event.target.closest('#accept-contract')) this.hooks.acceptContract();
     });
     this.ordersSec = document.getElementById('orders')!;
+    this.frontierSec = document.getElementById('frontier')!;
+    this.frontierBody = document.getElementById('frontier-body')!;
+    this.frontierBody.addEventListener('click', event => {
+      if (!(event.target instanceof Element)) return;
+      const button = event.target.closest('button');
+      const mode = button?.dataset.mode as CampaignMode | undefined;
+      const region = button?.dataset.region as RegionId | undefined;
+      if (mode) {
+        const seed = this.frontierBody.querySelector<HTMLInputElement>('#frontier-seed')!;
+        if (!seed.reportValidity()) return;
+        this.hooks.chooseCampaign(mode, seed.valueAsNumber);
+      }
+      if (region) this.hooks.selectRegion(region);
+      if (button?.id === 'frontier-advance') this.hooks.advanceCampaign();
+    });
     this.inspectorBody = document.getElementById('inspector-body')!;
+    this.inspectorBody.addEventListener('change', e => {
+      if (!(e.target instanceof HTMLSelectElement)) return;
+      const config = e.target.dataset.config as 'filter' | 'channel' | 'recipe' | undefined;
+      if (config && e.target.value) this.hooks.configure(config, e.target.value);
+    });
     this.statsBody = document.getElementById('stats-body')!;
     this.goalBody = document.getElementById('goal-body')!;
     this.inspectorSec = document.getElementById('inspector')!;
@@ -194,6 +225,7 @@ export class Hud {
 
     // 语言切换重建后强制重绘动态面板
     this.lastOrdersHtml = '';
+    this.lastFrontierHtml = '';
     this.lastInspectorHtml = '';
     this.lastStatsHtml = '';
     this.inspectorEmpty = false;
@@ -213,7 +245,7 @@ export class Hud {
         }
       });
     }
-    for (const sec of [this.ordersSec, this.inspectorSec, this.statsSec, this.goalSec]) {
+    for (const sec of [this.frontierSec, this.ordersSec, this.inspectorSec, this.statsSec, this.goalSec]) {
       const h = sec.querySelector('h3')!;
       h.setAttribute('role', 'button'); h.tabIndex = 0;
       const sync = () => h.setAttribute('aria-expanded', String(!sec.classList.contains('collapsed')));
@@ -235,11 +267,11 @@ export class Hud {
   rebuild() {
     const tool = this.curTool, speed = this.curSpeed;
     const collapsed = new Set<string>();
-    for (const sec of [this.ordersSec, this.inspectorSec, this.statsSec, this.goalSec]) {
+    for (const sec of [this.frontierSec, this.ordersSec, this.inspectorSec, this.statsSec, this.goalSec]) {
       if (sec.classList.contains('collapsed')) collapsed.add(sec.id);
     }
     this.buildStatic();
-    for (const sec of [this.ordersSec, this.inspectorSec, this.statsSec, this.goalSec]) {
+    for (const sec of [this.frontierSec, this.ordersSec, this.inspectorSec, this.statsSec, this.goalSec]) {
       sec.classList.toggle('collapsed', collapsed.has(sec.id));
       sec.querySelector('h3')!.setAttribute('aria-expanded', String(!collapsed.has(sec.id)));
     }
@@ -295,26 +327,44 @@ export class Hud {
     row.appendChild(mkBtn('bulldoze', icon('trash'), t('pal.bulldoze')));
 
     const cats: Array<[string, EntKind[]]> = [
+      [t('pal.frontier'), FRONTIER_TOOLS],
       [t('pal.logistics'), ['belt', 'turbo', 'splitter', 'merger', 'storage']],
       [t('pal.production'), ['extractor', 'furnace', 'press', 'assembler', 'recycler']],
       [t('pal.special'), ['export']],
     ];
     for (const [cat, kinds] of cats) {
-      const h = document.createElement('h3');
+      const isFrontier = kinds === FRONTIER_TOOLS;
+      const details = isFrontier ? document.createElement('details') : null;
+      const section = details ?? pal;
+      const h = document.createElement(isFrontier ? 'summary' : 'h3');
       h.textContent = cat;
-      pal.appendChild(h);
+      section.appendChild(h);
+      if (details) {
+        section.id = 'frontier-tools';
+        section.hidden = true;
+        pal.appendChild(section);
+        details.addEventListener('toggle', () => {
+          if (!details.open || this.frontierIcons) return;
+          this.frontierIcons = renderIcons(FRONTIER_TOOLS);
+          for (const k of FRONTIER_TOOLS) {
+            const img = this.toolBtns.get(k)?.querySelector('img');
+            if (img) img.src = this.frontierIcons[k];
+          }
+        });
+      }
       for (const k of kinds) {
         const d = DEFS[k];
         const card = document.createElement('button');
         card.type = 'button';
         card.className = 'pcard';
+        const thumb = isFrontier ? this.frontierIcons?.[k] : icons[k];
         card.innerHTML = `
-          <img src="${icons[k]}" alt="${kindName(k)}" />
+          <img ${thumb ? `src="${thumb}"` : ''} alt="" />
           <div><div class="pname">${kindName(k)}</div><div class="pdesc">${kindDesc(k)}</div></div>
           <span class="hk">${d.hotkey ?? ''}</span>
         `;
         card.addEventListener('click', () => this.hooks.setTool(k));
-        pal.appendChild(card);
+        section.appendChild(card);
         this.toolBtns.set(k, card);
       }
     }
@@ -393,6 +443,58 @@ export class Hud {
 
   hint(html: string) { this.hintEl.innerHTML = html; }
 
+  refreshFrontier(sim: Sim) {
+    const campaign = sim.campaign;
+    let body: string;
+    if (!campaign) {
+      body = `<p class="frontier-note">${t('frontier.choose')}</p>
+        <label class="frontier-setting">${t('frontier.seed')}<input id="frontier-seed" type="number" min="0" max="4294967295" step="1" value="${DEFAULT_SEED}" required></label>
+        <div class="frontier-choices">
+          <button type="button" class="btn" data-mode="research">${t('frontier.research')}</button><span>${t('frontier.researchHint')}</span>
+          <button type="button" class="btn" data-mode="corporate">${t('frontier.corporate')}</button><span>${t('frontier.corporateHint')}</span>
+        </div>`;
+    } else {
+      const goal = sim.campaignGoal();
+      const map = REGION_IDS.map(id => {
+        const def = REGIONS[id];
+        const opened = sim.hasRegion(id);
+        const power = sim.powerStatus(id);
+        const cost = def.shipment
+          ? `${itemName(def.shipment[0])} ${Math.min(sim.ledger.exported[def.shipment[0]], def.shipment[1])}/${def.shipment[1]} · ${money(def.credits)}`
+          : '';
+        const status = opened ? t('frontier.power', { used: power.demand, supply: power.supply })
+          : def.parent && !sim.hasRegion(def.parent) ? t('frontier.lockedBy', { name: regionName(def.parent) }) : cost;
+        return `<div class="region-tile ${opened ? 'open' : ''}">
+          <button type="button" class="btn" data-region="${id}" aria-label="${t(opened ? 'frontier.goto' : 'frontier.unlock', { name: regionName(id) })}" ${opened || sim.canUnlockRegion(id) ? '' : 'disabled'}>${regionName(id)}</button><span>${status}</span>
+        </div>`;
+      }).join('');
+      const requirements: Array<[string, number, number]> = goal ? [
+        [itemName(goal.shipment[0]), goal.delivered, goal.shipment[1]],
+        [t('frontier.cost'), sim.credits, goal.credits],
+        [t('frontier.restored'), sim.restoredTiles.size, goal.restored],
+        [t('frontier.orders'), sim.orderIdx, goal.orders],
+        [t('frontier.profit'), goal.retainedProfit, goal.profit],
+        [t('frontier.freight'), sim.freightDeliveries, goal.freight],
+        [t('frontier.needsSkyreach'), Number(sim.hasRegion('skyreach')), Number(goal.skyreach)],
+      ] : [];
+      body = `<div class="frontier-key"><strong>${t(`frontier.${campaign.mode}`)}</strong><span class="num">#${campaign.seed}</span></div>
+        <div class="region-grid">${map}</div>
+        ${sim.hasRegion('fernwash') ? '' : `<p class="frontier-note">${t('frontier.noLab')}</p>`}
+        ${goal ? `<ul class="frontier-checks">${requirements.filter(([, , max]) => max > 0).map(([label, value, max]) =>
+        `<li class="kv ${value >= max ? 'met' : ''}"><span>${label}</span><b>${money(Math.min(value, max))}/${money(max)}</b></li>`).join('')}</ul>
+        <button type="button" class="btn primary" id="frontier-advance" ${goal.ready ? '' : 'disabled'}>${t(`frontier.${campaign.mode}.${campaign.stage}`)}</button>`
+        : `<p class="frontier-note frontier-complete">${t(`frontier.${campaign.mode}.complete`)}</p>`}`;
+    }
+    if (body !== this.lastFrontierHtml) {
+      const focused = document.activeElement instanceof HTMLButtonElement && this.frontierBody.contains(document.activeElement)
+        ? document.activeElement : null;
+      this.lastFrontierHtml = body;
+      this.frontierBody.innerHTML = body;
+      if (focused?.dataset.region) this.frontierBody.querySelector<HTMLButtonElement>(`[data-region="${focused.dataset.region}"]`)?.focus({ preventScroll: true });
+    }
+    document.getElementById('frontier-tools')!.hidden = !sim.hasRegion('fernwash');
+  }
+
   // ---------------- 订单面板 ----------------
   refreshOrders(sim: Sim) {
     const o = sim.currentOrder();
@@ -431,6 +533,9 @@ export class Hud {
 
   // ---------------- 检视器 ----------------
   refreshInspector(sel: Ent | null, sim: Sim) {
+    const side = this.inspectorSec.parentElement!;
+    if (sel && side.firstElementChild !== this.inspectorSec) side.prepend(this.inspectorSec);
+    if (!sel && this.inspectorSec.previousElementSibling !== this.ordersSec) this.ordersSec.after(this.inspectorSec);
     if (!sel) {
       if (this.inspectorEmpty) return; // 内容不变，跳过重建
       this.inspectorEmpty = true;
@@ -454,8 +559,31 @@ export class Hud {
     } else if (sel.kind === 'splitter' || sel.kind === 'merger') {
       body += `<div class="kv"><span>${kindDesc(sel.kind)}</span></div>`;
       body += `<div class="kv"><span>${t('insp.queue')}</span><b>${sel.queue!.length} / 3</b></div>`;
+    } else if (sel.kind === 'sorter' || sel.channel !== undefined || sel.kind === 'generator') {
+      body += `<div class="kv"><span>${kindDesc(sel.kind)}</span></div>`;
+      if (sel.kind === 'generator') {
+        const status = sim.powerStatus(regionIdAt(sel.x, sel.y));
+        body += `<div class="kv"><b>${t('frontier.power', { used: status.demand, supply: status.supply })}</b></div>`;
+      } else {
+        body += `<div class="kv"><span>${t('insp.queue')}</span><b>${sel.queue!.length} / ${sel.kind === 'freight_receive' ? STORAGE_CAP : NODE_QUEUE_MAX}</b></div>`;
+        if (sel.kind === 'sorter') {
+          body += `<label class="frontier-setting">${t('frontier.filter')}<select data-config="filter">${ITEM_ORDER.map(item => `<option value="${item}" ${item === sel.filter ? 'selected' : ''}>${itemName(item)}</option>`).join('')}</select></label>`;
+        } else {
+          body += `<label class="frontier-setting">${t('frontier.channel')}<select data-config="channel">${Array.from({ length: FREIGHT_CHANNELS }, (_, i) => `<option value="${i}" ${i === sel.channel ? 'selected' : ''}>${i + 1}</option>`).join('')}</select></label>`;
+          if (sel.kind === 'freight_send') {
+            const n = sim.freightLinks(sel);
+            body += `<div class="kv"><span>${n ? t('frontier.connected', { n }) : t('frontier.offline')}</span></div>`;
+          }
+        }
+      }
     } else if (sel.kind === 'storage') {
       const n = sel.queue!.length;
+      if (sim.hasRegion('fernwash')) {
+        body += `<label class="frontier-setting">${t('frontier.storageFilter')}<select data-config="filter">
+          <option value="any">${t('frontier.anyItem')}</option>
+          ${ITEM_ORDER.map(item => `<option value="${item}" ${item === sel.filter ? 'selected' : ''}>${itemName(item)}</option>`).join('')}
+        </select></label>`;
+      }
       body += `<div class="kv"><span>${t('insp.stock')}</span><b>${n} / 48</b></div>`;
       body += `<div class="bar b"><i style="width:${(n / 48 * 100).toFixed(0)}%"></i></div>`;
       const c = new Map<ItemKey, number>();
@@ -472,10 +600,18 @@ export class Hud {
       body += `<div class="kv"><span>${t('insp.total')}</span><b>${total}</b></div>`;
     } else {
       // 加工机器
-      const st = sel.state!;
+      const st = sel.powered === false ? 'unpowered' : sel.state!;
       body += `<div class="kv"><span>${t('insp.state')}</span><span class="state-chip state-${st}"><span class="dot"></span>${stateLabel(st)}</span></div>`;
+      if (POWER_USE[sel.kind]) body += `<div class="kv"><span>${t('frontier.powerUse')}</span><b>${POWER_USE[sel.kind]}</b></div>`;
       if (sel.kind !== 'extractor') {
-        const rs = recipesFor(sel.kind as 'furnace' | 'press' | 'assembler' | 'recycler');
+        const rs = sim.availableRecipes(sel);
+        if (sel.kind === 'advanced_assembler') {
+          const locked = !!(sel.recipe || sel.pool?.size);
+          body += `<label class="frontier-setting">${t('frontier.recipe')}<select data-config="recipe" ${locked ? 'disabled' : ''}>
+            <option value="" disabled ${sel.selectedRecipe ? '' : 'selected'}>${t('frontier.noRecipe')}</option>
+            ${rs.map(r => `<option value="${r.id}" ${sel.selectedRecipe === r.id ? 'selected' : ''}>${itemName(Object.keys(r.outputs)[0] as ItemKey)}</option>`).join('')}
+          </select></label>${locked ? `<p class="frontier-note">${t('frontier.recipeLocked')}</p>` : ''}`;
+        }
         body += `<div style="font-size:12px;color:var(--ink-dim);margin-top:2px">${t('insp.recipes')}</div>`;
         for (const r of rs) {
           const inPart = (Object.keys(r.inputs) as ItemKey[]).map(k => itemChip(k, r.inputs[k])).join(' + ');
@@ -484,7 +620,7 @@ export class Hud {
           body += `<div class="recipe-line ${act ? 'hot' : ''}">${inPart} <span class="recipe-arrow">→</span> ${outPart} <span style="color:var(--ink-dim)">${(r.time / [1, 1.5, 2.25][(sel.level || 1) - 1]).toFixed(1)}s</span></div>`;
         }
       } else {
-        body += `<div class="kv"><span>${t('insp.ore')}</span><b>${sel.ore === 'copper' ? t('insp.oreCopper') : t('insp.oreIron')}</b></div>`;
+        body += `<div class="kv"><span>${t('insp.ore')}</span><b>${itemName(ORE_ITEM[sel.ore!])}</b></div>`;
         body += `<div class="kv"><span>${t('insp.cycleLabel')}</span><b>${t('insp.cycle', { v: (2 / [1, 1.5, 2.25][(sel.level || 1) - 1]).toFixed(1) })}</b></div>`;
       }
       if (sel.recipe) {
@@ -515,6 +651,9 @@ export class Hud {
     </div>`;
     // HTML 与当前渲染一致 → 跳过重建（省解析/布局；旧按钮监听器仍有效，行为一致）
     if (body === this.lastInspectorHtml) return;
+    if (document.activeElement instanceof HTMLSelectElement && this.inspectorBody.contains(document.activeElement)
+      && this.inspectorBody.dataset.entity === String(sel.id)) return;
+    this.inspectorBody.dataset.entity = String(sel.id);
     this.lastInspectorHtml = body;
     this.inspectorBody.innerHTML = body;
     document.getElementById('sa-rot')!.addEventListener('click', () => this.hooks.rotate());
@@ -548,12 +687,13 @@ export class Hud {
       body += `<div class="spark-wrap"><canvas id="histchart" width="232" height="72"></canvas></div>`;
     }
 
-    const states = { working: 0, starved: 0, blocked: 0, idle: 0 };
+    const states = { working: 0, starved: 0, blocked: 0, idle: 0, unpowered: 0 };
     let uSum = 0;
     for (const p of sim.procs) { states[p.state!]++; uSum += p.emaW || 0; }
     const avgU = sim.procs.length ? uSum / sim.procs.length : 0;
     body += `<div class="kv" style="margin-top:6px"><span>${t('stats.machines', { n: sim.procs.length })}</span></div>`;
     body += `<div class="kv"><span>${t('stats.overview', { w: states.working, s: states.starved, b: states.blocked, i: states.idle })}</span></div>`;
+    if (states.unpowered) body += `<div class="kv"><span>${t('state.unpowered')}</span><b>${states.unpowered}</b></div>`;
     body += `<div class="kv"><span>${t('stats.avgUtil')}</span><b>${(avgU * 100).toFixed(0)}%</b></div>`;
     body += `<div class="bar g"><i style="width:${(avgU * 100).toFixed(0)}%"></i></div>`;
     const load = sim.beltLoad();
@@ -800,6 +940,8 @@ export class Hud {
         <div class="kv"><span>${t('help.sound')}</span></div>
       </div>
       <p>${t('help.tips')}</p>
+      <p><b>${t('frontier.title')}</b></p>
+      <p>${t('frontier.expansionHelp')}</p>
     `, [{ label: t('help.startBtn'), cls: 'primary', cb: () => {} }]);
   }
 }

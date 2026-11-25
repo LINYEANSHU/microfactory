@@ -4,7 +4,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { M, makeGroundTexture } from './materials';
+import { M, makeGroundTexture, cellX, cellZ } from './materials';
+import { GRID } from '../core/defs';
+import { REGIONS, tileKey, type RegionId } from '../sim/regions';
+import type { Sim } from '../sim/engine';
 
 export class World {
   scene = new THREE.Scene();
@@ -14,6 +17,16 @@ export class World {
   groundMesh!: THREE.Mesh;
   private clouds: THREE.Group[] = [];
   private islands: THREE.Group[] = [];
+  private sun!: THREE.DirectionalLight;
+  private regions = new Map<RegionId, THREE.Group>();
+  private sites = new Map<number, THREE.Mesh>();
+  private plantGeometry = new THREE.ConeGeometry(0.26, 0.62, 5);
+  private siteGeometry = new THREE.BoxGeometry(1.08, 0.065, 1.08);
+  private landSeed: number | null = null;
+  private restorations = -1;
+  private limitX = 22;
+  private limitZ = 22;
+  private flight: { capsule: THREE.Group; elapsed: number } | null = null;
 
   constructor(container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -66,7 +79,8 @@ export class World {
     c.near = 5; c.far = 100;
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.03;
-    this.scene.add(sun);
+    this.sun = sun;
+    this.scene.add(sun, sun.target);
 
     const hemi = new THREE.HemisphereLight(0xcfe5ff, 0x9a8a6f, 1.35);
     this.scene.add(hemi);
@@ -90,6 +104,114 @@ export class World {
     const rim = new THREE.Mesh(new THREE.BoxGeometry(34.3, 0.4, 34.3), M(0x5a4c34, { flat: true }));
     rim.position.y = -0.62;
     this.scene.add(rim);
+  }
+
+  syncRegions(sim: Sim) {
+    this.clearFlight();
+    const seed = sim.campaign?.seed ?? null;
+    for (const [id, group] of this.regions) {
+      if (seed === this.landSeed && sim.hasRegion(id)) continue;
+      this.scene.remove(group);
+      const land = group.userData.land as THREE.Mesh<THREE.BoxGeometry, THREE.Material[]>;
+      land.geometry.dispose();
+      const surface = land.material[2] as THREE.MeshStandardMaterial;
+      surface.map?.dispose();
+      surface.dispose();
+      this.regions.delete(id);
+      for (const child of group.children) {
+        if (typeof child.userData.site === 'number') this.sites.delete(child.userData.site);
+      }
+    }
+    this.landSeed = seed;
+    for (const region of sim.openRegions) {
+      if (region.id === 'harbor' || this.regions.has(region.id)) continue;
+      const group = new THREE.Group();
+      const side = M(0x6c7257, { flat: true });
+      const top = new THREE.MeshStandardMaterial({ map: makeGroundTexture(region, seed ?? 0), roughness: 0.95 });
+      const land = new THREE.Mesh(new THREE.BoxGeometry(GRID, 1.9, GRID), [side, side, top, side, side, side]);
+      land.position.set(region.x, -0.94, region.y);
+      land.receiveShadow = true;
+      group.add(land);
+      group.userData.land = land;
+      const plantColor = region.id === 'fernwash' ? 0x3a6951 : region.id === 'glassfen' ? 0x3e8582 : 0x699381;
+      const plants = new THREE.InstancedMesh(this.plantGeometry, M(plantColor, { flat: true }), region.plantTiles.length);
+      const matrix = new THREE.Matrix4();
+      region.plantTiles.forEach((plant, i) => {
+        const fraction = 0.65 + (i % 5) * 0.12;
+        matrix.makeScale(fraction, fraction, fraction).setPosition(cellX(plant.x) + 0.24, 0.28 * fraction, cellZ(plant.y) + 0.24);
+        plants.setMatrixAt(i, matrix);
+      });
+      group.add(plants);
+      for (const site of region.scarTiles) {
+        const key = tileKey(site.x, site.y);
+        const bed = new THREE.Mesh(this.siteGeometry, M(0xae7953, { flat: true }));
+        bed.position.set(cellX(site.x), 0.029, cellZ(site.y));
+        bed.userData.site = key;
+        this.sites.set(key, bed);
+        group.add(bed);
+      }
+      this.regions.set(region.id, group);
+      this.scene.add(group);
+    }
+    this.limitX = sim.W - GRID + 22;
+    this.limitZ = sim.H - GRID + 22;
+    this.sun.target.position.set((sim.W - GRID) / 2, 0, (sim.H - GRID) / 2);
+    this.sun.position.copy(this.sun.target.position).add(new THREE.Vector3(26, 38, 14));
+    const s = sim.openRegions.length > 1 ? 49 : 24;
+    Object.assign(this.sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s });
+    this.sun.shadow.camera.updateProjectionMatrix();
+    this.restorations = -1;
+    this.syncRestoration(sim);
+  }
+
+  syncRestoration(sim: Sim) {
+    if (sim.restoredTiles.size === this.restorations) return;
+    this.restorations = sim.restoredTiles.size;
+    for (const [key, bed] of this.sites) {
+      bed.material = M(sim.restoredTiles.has(key) ? 0x568746 : 0xae7953, { flat: true });
+    }
+  }
+
+  focusRegion(id: RegionId) {
+    const { x, y } = REGIONS[id];
+    const shift = new THREE.Vector3(x - this.controls.target.x, -this.controls.target.y, y - this.controls.target.z);
+    this.camera.position.add(shift);
+    this.controls.target.add(shift);
+    this.controls.update();
+  }
+
+  launchPayload() {
+    this.focusRegion('skyreach');
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    this.clearFlight();
+    const capsule = new THREE.Group();
+    const hull = M(0xdbd4aa, { metal: 0.45, rough: 0.36 });
+    const trace = M(0xedbb65, { emissive: 0xe68330, emissiveIntensity: 1.65 });
+    const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.47, 0.55, 1.65, 8), hull);
+    pod.position.y = 1.05;
+    capsule.add(pod);
+    const crown = new THREE.Mesh(new THREE.ConeGeometry(0.47, 0.65, 8), hull);
+    crown.position.y = 2.2;
+    capsule.add(crown);
+    for (const side of [-1, 1]) {
+      const wing = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.085, 0.66), M(0x405c80));
+      wing.position.set(side * 0.72, 0.74, 0);
+      capsule.add(wing);
+    }
+    const engine = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.9, 8), trace);
+    engine.position.y = 0.01;
+    engine.rotation.z = Math.PI;
+    capsule.add(engine);
+    capsule.position.set(REGIONS.skyreach.x, 0.45, REGIONS.skyreach.y);
+    this.scene.add(capsule);
+    this.flight = { capsule, elapsed: 0 };
+  }
+
+  private clearFlight() {
+    if (!this.flight) return;
+    this.scene.remove(this.flight.capsule);
+    for (const child of this.flight.capsule.children as THREE.Mesh[]) child.geometry.dispose();
+    this.flight = null;
   }
 
   private buildEnvironment() {
@@ -137,6 +259,13 @@ export class World {
   }
 
   animate(dt: number, time: number) {
+    if (this.flight) {
+      const { capsule } = this.flight;
+      const elapsed = this.flight.elapsed += dt;
+      capsule.position.y = 0.45 + elapsed * elapsed * 3.8;
+      capsule.rotation.y += dt * 0.38;
+      if (elapsed >= 4) this.clearFlight();
+    }
     for (let i = 0; i < this.clouds.length; i++) {
       const c = this.clouds[i];
       c.position.x += dt * (0.25 + (i % 3) * 0.12);
@@ -147,8 +276,8 @@ export class World {
     }
     // 视点限制在场地附近
     const t = this.controls.target;
-    t.x = Math.max(-22, Math.min(22, t.x));
-    t.z = Math.max(-22, Math.min(22, t.z));
+    t.x = Math.max(-22, Math.min(this.limitX, t.x));
+    t.z = Math.max(-22, Math.min(this.limitZ, t.z));
     t.y = Math.max(-2, Math.min(8, t.y));
     this.controls.update();
   }

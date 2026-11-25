@@ -8,7 +8,13 @@ import {
   OUT_CAP, EXTRACT_TIME, EXTRACT_OUT_CAP, GRID, PATCHES, relDir,
   FRONT, RIGHT, BACK, LEFT,
   ITEM_VALUE, UPGRADE_COST, MAX_LEVEL, SPEED_DIV, START_CREDITS, orderAt,
+  ITEM_ORDER, ITEMS, POWER_SUPPLY, POWER_USE, FRONTIER_TOOLS, FREIGHT_CHANNELS, FREIGHT_SECONDS,
+  type Ore,
 } from '../core/defs';
+import {
+  CAMPAIGN_GOALS, DEFAULT_SEED, makeRegion, REGIONS, REGION_IDS, regionIdAt, tileKey, WORLD_GRID,
+  type Campaign, type CampaignMode, type Region, type RegionId,
+} from './regions';
 
 const POOL_PER_TYPE = 6; // 输入池中同种物品的上限
 const RUSH_CONTRACTS = [
@@ -24,14 +30,15 @@ interface ContractRun {
 
 // 提取器配方（按矿种共享的常量对象）：每台采矿机每 2 秒完成一次提取，
 // 若每次 new 会造成持续的小对象分配；配方只读不写，可安全共享。
-const EXTRACT_RECIPES: Record<'iron' | 'copper', Recipe> = {
-  iron: { id: 'extract', machine: 'furnace', inputs: {}, outputs: { iron_ore: 1 }, time: EXTRACT_TIME },
-  copper: { id: 'extract', machine: 'furnace', inputs: {}, outputs: { copper_ore: 1 }, time: EXTRACT_TIME },
-};
+const ORES = Object.keys(ORE_ITEM) as Ore[];
+const EXTRACT_RECIPES = Object.fromEntries(ORES.map(ore => [
+  ore, { id: 'extract', machine: 'furnace', inputs: {}, outputs: { [ORE_ITEM[ore]]: 1 }, time: EXTRACT_TIME },
+])) as Record<Ore, Recipe>;
+export const GENERATOR_COST = 75;
 
 export type Entry = 0 | 1 | 2; // 0 直线 / 1 右侧切入 / 2 左侧切入
 export interface BeltItem { ty: ItemKey; p: number; entry: Entry }
-export type MachineState = 'idle' | 'working' | 'starved' | 'blocked';
+export type MachineState = 'idle' | 'working' | 'starved' | 'blocked' | 'unpowered';
 
 export interface Ent {
   id: number;
@@ -47,7 +54,12 @@ export interface Ent {
   out?: Map<ItemKey, number>;
   recipe?: Recipe | null;
   progress?: number;
-  ore?: 'iron' | 'copper';
+  ore?: Ore;
+  selectedRecipe?: string;
+  filter?: ItemKey;
+  channel?: number;
+  readyAt?: number;
+  powered?: boolean;
   state?: MachineState;
   secW?: number; secS?: number; secB?: number; // 本秒内各状态累计
   emaW?: number; emaS?: number; emaB?: number; // 利用率/饥饿/堵塞 指数平滑
@@ -60,10 +72,8 @@ export interface Ent {
 
 export type Count = Partial<Record<ItemKey, number>>;
 
-const emptyCount = (): Record<ItemKey, number> => ({
-  iron_ore: 0, copper_ore: 0, iron_ingot: 0, copper_ingot: 0,
-  gear: 0, wire: 0, circuit: 0, robot: 0,
-});
+const COUNT_TEMPLATE = Object.fromEntries(ITEM_ORDER.map(item => [item, 0])) as Record<ItemKey, number>;
+const emptyCount = () => ({ ...COUNT_TEMPLATE });
 
 const mapTotal = (m?: Map<ItemKey, number>): number => {
   if (!m) return 0;
@@ -82,6 +92,13 @@ export interface SaveData {
   orderIdx?: number;
   orderBase?: number;
   contract?: { index: number; active: ContractRun | null };
+  frontier?: {
+    campaign: Campaign;
+    regions: RegionId[];
+    restoredTiles: number[];
+    freightDeliveries: number;
+    nextAutomaticContract: number;
+  };
   // 历史曲线采样点 [t, credits, totalExported]，10 秒一个点（可选，旧存档无此字段）
   hist?: Array<[number, number, number]>;
 }
@@ -114,40 +131,143 @@ export class Sim {
   orderBase = 0;
   private contractIndex = 0;
   private activeContract: ContractRun | null = null;
+  campaign: Campaign | null = null;
+  openRegions: Region[] = [];
+  private opened = new Set<RegionId>();
+  private scars = new Set<number>();
+  restoredTiles = new Set<number>();
+  freightDeliveries = 0;
+  private nextAutomaticContract = 0;
+  generators: Ent[] = [];
+  private freightReceivers: Ent[][] = Array.from({ length: FREIGHT_CHANNELS }, () => []);
+  private remainingPower = new Map<RegionId, number>();
+  private powerSupply = new Map<RegionId, number>();
+  private powerDemand = new Map<RegionId, number>();
   onExport: ((ty: ItemKey, x: number, y: number) => void) | null = null;
   onProduce: ((ty: ItemKey) => void) | null = null;
   onOrderDone: ((orderIdx: number, reward: number, item: ItemKey, target: number) => void) | null = null;
   onContractEnd: ((reward: number) => void) | null = null;
-  private patches: Uint8Array; // 0 无 1 铁 2 铜
+  private patches = new Uint8Array(WORLD_GRID * WORLD_GRID);
 
   constructor() {
     this.cells = new Array(this.W * this.H).fill(null);
-    this.patches = new Uint8Array(this.W * this.H);
-    for (const p of PATCHES) {
-      const v = p.ore === 'iron' ? 1 : 2;
-      for (let y = p.y0; y <= p.y1; y++) for (let x = p.x0; x <= p.x1; x++) this.patches[y * this.W + x] = v;
-    }
+    this.addRegion('harbor');
     for (let i = 0; i < 60; i++) this.exportRing.push(emptyCount());
   }
 
   idx(x: number, y: number) { return y * this.W + x; }
-  inBounds(x: number, y: number) { return x >= 0 && y >= 0 && x < this.W && y < this.H; }
+  inBounds(x: number, y: number) {
+    return x >= 0 && y >= 0 && x < this.W && y < this.H
+      && (this.openRegions.length === 1 || this.openRegions.length === REGION_IDS.length || this.opened.has(regionIdAt(x, y)));
+  }
   get(x: number, y: number): Ent | null { return this.inBounds(x, y) ? this.cells[this.idx(x, y)] : null; }
-  oreAt(x: number, y: number): 'iron' | 'copper' | null {
+  oreAt(x: number, y: number): Ore | null {
     if (!this.inBounds(x, y)) return null;
-    const v = this.patches[this.idx(x, y)];
-    return v === 1 ? 'iron' : v === 2 ? 'copper' : null;
+    return ORES[this.patches[tileKey(x, y)] - 1] ?? null;
+  }
+
+  chooseCampaign(mode: CampaignMode, seed = DEFAULT_SEED): boolean {
+    if (this.campaign || (mode !== 'research' && mode !== 'corporate')
+      || !Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) return false;
+    this.campaign = { mode, seed, stage: 'charter' };
+    return true;
+  }
+
+  hasRegion(id: RegionId): boolean { return this.opened.has(id); }
+
+  canUnlockRegion(id: RegionId): boolean {
+    const def = REGIONS[id];
+    return !!this.campaign && !!def?.parent && this.opened.has(def.parent) && !this.opened.has(id)
+      && this.credits >= def.credits
+      && (!def.shipment || this.ledger.exported[def.shipment[0]] >= def.shipment[1]);
+  }
+
+  unlockRegion(id: RegionId): boolean {
+    if (!this.canUnlockRegion(id)) return false;
+    this.credits -= REGIONS[id].credits;
+    this.addRegion(id);
+    return true;
+  }
+
+  private addRegion(id: RegionId) {
+    const area = makeRegion(id, this.campaign?.seed ?? DEFAULT_SEED);
+    const width = Math.max(this.W, area.x + GRID), height = Math.max(this.H, area.y + GRID);
+    if (width !== this.W || height !== this.H) {
+      const cells: (Ent | null)[] = new Array(width * height).fill(null);
+      for (let y = 0; y < this.H; y++) for (let x = 0; x < this.W; x++) {
+        cells[y * width + x] = this.cells[this.idx(x, y)];
+      }
+      this.W = width; this.H = height; this.cells = cells;
+    }
+    for (const p of area.patches) {
+      const v = ORES.indexOf(p.ore) + 1;
+      for (let y = p.y0; y <= p.y1; y++) for (let x = p.x0; x <= p.x1; x++) this.patches[tileKey(x, y)] = v;
+    }
+    for (const site of area.scarTiles) this.scars.add(tileKey(site.x, site.y));
+    this.openRegions.push(area);
+    this.opened.add(id);
+  }
+
+  isRestorationSite(x: number, y: number) { return this.inBounds(x, y) && this.scars.has(tileKey(x, y)); }
+
+  campaignGoal() {
+    const run = this.campaign;
+    if (!run || run.stage === 'complete') return null;
+    const goal = CAMPAIGN_GOALS[run.mode][run.stage];
+    const delivered = this.ledger.exported[goal.shipment[0]];
+    const retainedProfit = Math.max(0, this.credits - START_CREDITS);
+    const ready = this.credits >= goal.credits && delivered >= goal.shipment[1] && retainedProfit >= goal.profit
+      && this.orderIdx >= goal.orders && this.restoredTiles.size >= goal.restored
+      && this.freightDeliveries >= goal.freight && (!goal.skyreach || this.hasRegion('skyreach'));
+    return { ...goal, delivered, retainedProfit, ready };
+  }
+
+  advanceCampaign(): boolean {
+    const goal = this.campaignGoal();
+    if (!goal?.ready || !this.campaign) return false;
+    this.credits -= goal.credits;
+    this.campaign.stage = this.campaign.stage === 'charter' ? 'commission' : 'complete';
+    return true;
+  }
+
+  powerStatus(id: RegionId) {
+    return { supply: this.powerSupply.get(id) ?? 0, demand: this.powerDemand.get(id) ?? 0 };
+  }
+
+  private refreshPower() {
+    this.powerSupply.clear();
+    this.powerDemand.clear();
+    this.remainingPower.clear();
+    for (const e of this.generators) {
+      const id = regionIdAt(e.x, e.y);
+      const supply = (this.powerSupply.get(id) ?? 0) + POWER_SUPPLY;
+      this.powerSupply.set(id, supply);
+      this.remainingPower.set(id, supply);
+    }
+    const consumers = this.procs.filter(e => POWER_USE[e.kind])
+      .sort((a, b) => tileKey(a.x, a.y) - tileKey(b.x, b.y));
+    for (const e of consumers) {
+      const use = POWER_USE[e.kind]!;
+      const id = regionIdAt(e.x, e.y);
+      const remaining = this.remainingPower.get(id) ?? 0;
+      this.powerDemand.set(id, (this.powerDemand.get(id) ?? 0) + use);
+      e.powered = remaining >= use;
+      if (e.powered) this.remainingPower.set(id, remaining - use);
+    }
   }
 
   // ---------------- 建造 ----------------
   canPlace(kind: EntKind, x: number, y: number): boolean {
-    if (!this.inBounds(x, y)) return false;
+    if (!Number.isInteger(x) || !Number.isInteger(y) || !this.inBounds(x, y)) return false;
+    if (FRONTIER_TOOLS.includes(kind) && this.openRegions.length < 2) return false;
+    if (kind === 'generator' && this.credits < GENERATOR_COST) return false;
     const cur = this.cells[this.idx(x, y)];
     if (kind === 'belt' || kind === 'turbo') {
       return cur === null || cur.kind === 'belt' || cur.kind === 'turbo';
     }
     if (cur !== null) return false;
     if (kind === 'extractor') return this.oreAt(x, y) !== null;
+    if (kind === 'cultivator') return this.isRestorationSite(x, y);
     return true;
   }
 
@@ -165,6 +285,7 @@ export class Sim {
       return e;
     }
     const e = this.makeEnt(kind, x, y, rot);
+    if (kind === 'generator') this.credits -= GENERATOR_COST;
     this.install(e);
     return e;
   }
@@ -172,8 +293,10 @@ export class Sim {
   private makeEnt(kind: EntKind, x: number, y: number, rot: Dir): Ent {
     const e: Ent = { id: this.nextId++, kind, x, y, rot, active: 0 };
     if (kind === 'belt' || kind === 'turbo') e.items = [];
-    if (kind === 'splitter' || kind === 'merger' || kind === 'storage') { e.queue = []; e.rr = 0; }
-    if (kind === 'extractor' || kind === 'furnace' || kind === 'press' || kind === 'assembler' || kind === 'recycler') {
+    if (DEFS[kind].cat === 'logistics' && !e.items) { e.queue = []; e.rr = 0; }
+    if (kind === 'sorter') e.filter = 'slag';
+    if (kind === 'freight_send' || kind === 'freight_receive') { e.channel = 0; e.readyAt = 0; }
+    if (kind === 'extractor' || recipesFor(kind).length > 0) {
       e.pool = new Map(); e.out = new Map(); e.recipe = null; e.progress = 0;
       e.state = 'idle'; e.secW = 0; e.secS = 0; e.secB = 0; e.emaW = 0; e.emaS = 0; e.emaB = 0;
       e.level = 1;
@@ -186,12 +309,17 @@ export class Sim {
   private install(e: Ent) {
     this.cells[this.idx(e.x, e.y)] = e;
     this.categorize(e);
+    if (e.kind === 'generator' || POWER_USE[e.kind]) this.refreshPower();
   }
 
   private categorize(e: Ent) {
     if (e.kind === 'belt' || e.kind === 'turbo') this.belts.push(e);
-    else if (e.kind === 'splitter' || e.kind === 'merger' || e.kind === 'storage') this.nodes.push(e);
+    else if (e.queue) {
+      this.nodes.push(e);
+      if (e.kind === 'freight_receive') this.freightReceivers[e.channel!].push(e);
+    }
     else if (e.kind === 'export') this.terminals.push(e);
+    else if (e.kind === 'generator') this.generators.push(e);
     else this.procs.push(e);
   }
 
@@ -220,39 +348,102 @@ export class Sim {
 
   insertEnt(s: SerEnt): boolean {
     if (!s || typeof s.k !== 'string' || !Object.prototype.hasOwnProperty.call(DEFS, s.k)) return false;
-    if (!Number.isInteger(s.x) || !Number.isInteger(s.y) || !this.inBounds(s.x, s.y)) return false;
+    if (!this.canInsert(s.k, s.x, s.y)) return false;
     if (!Number.isInteger(s.r) || s.r < 0 || s.r > 3) return false;
-    if (this.cells[this.idx(s.x, s.y)] !== null) return false;
-    if (s.k === 'extractor' && !this.oreAt(s.x, s.y)) return false;
     const e = this.makeEnt(s.k, s.x, s.y, s.r);
     const d = s.d || {};
     if (e.items) e.items = (d.items || []).map((a: any) => ({ ty: a[0], p: a[1], entry: a[2] }));
     if (e.queue) { e.queue = [...(d.queue || [])]; e.rr = d.rr || 0; }
+    if ((e.kind === 'sorter' || e.kind === 'storage') && Object.hasOwn(ITEMS, d.filter)) e.filter = d.filter;
+    if (e.channel !== undefined) {
+      if (Number.isInteger(d.channel) && d.channel >= 0 && d.channel < FREIGHT_CHANNELS) e.channel = d.channel;
+      if (Number.isFinite(d.readyAt) && d.readyAt >= 0) e.readyAt = d.readyAt;
+    }
     if (e.pool) {
       e.pool = new Map((d.pool || []).map((a: any) => [a[0], a[1]]));
       e.out = new Map((d.out || []).map((a: any) => [a[0], a[1]]));
       e.progress = d.prog || 0;
       e.level = Math.min(MAX_LEVEL, Math.max(1, d.lvl || 1));
-      e.recipe = d.rec ? recipeById(d.rec) : null;
+      const recipe = typeof d.rec === 'string' ? recipeById(d.rec) : null;
+      e.recipe = recipe?.machine === e.kind ? recipe : null;
+      if (e.kind === 'advanced_assembler' && typeof d.selectedRecipe === 'string'
+        && recipeById(d.selectedRecipe)?.machine === e.kind) e.selectedRecipe = d.selectedRecipe;
       if (e.kind === 'extractor') {
         const patchOre = this.oreAt(s.x, s.y) ?? 'iron';
         e.ore = patchOre;
-        if (d.ore && d.ore !== patchOre) { e.recipe = null; e.progress = 0; }
+        if (d.rec === 'extract' && (!d.ore || d.ore === patchOre)) e.recipe = EXTRACT_RECIPES[patchOre];
       }
+      if (!e.recipe) e.progress = 0;
     }
     if (e.counts) e.counts = new Map((d.counts || []).map((a: any) => [a[0], a[1]]));
     this.install(e);
     return true;
   }
 
+  canInsert(kind: EntKind, x: number, y: number): boolean {
+    return Number.isInteger(x) && Number.isInteger(y) && this.inBounds(x, y)
+      && this.cells[this.idx(x, y)] === null
+      && (kind !== 'extractor' || !!this.oreAt(x, y))
+      && (kind !== 'cultivator' || this.isRestorationSite(x, y))
+      && (!FRONTIER_TOOLS.includes(kind) || this.openRegions.length >= 2);
+  }
+
   private removeFromLists(e: Ent) {
     let arr: Ent[] | null = null;
     if (e.kind === 'belt' || e.kind === 'turbo') arr = this.belts;
-    else if (e.kind === 'splitter' || e.kind === 'merger' || e.kind === 'storage') arr = this.nodes;
+    else if (e.queue) arr = this.nodes;
     else if (e.kind === 'export') arr = this.terminals;
+    else if (e.kind === 'generator') arr = this.generators;
     else arr = this.procs;
     const i = arr.indexOf(e);
     if (i >= 0) arr.splice(i, 1);
+    if (e.kind === 'freight_receive') {
+      const group = this.freightReceivers[e.channel!];
+      group.splice(group.indexOf(e), 1);
+    }
+    if (e.kind === 'generator' || POWER_USE[e.kind]) this.refreshPower();
+  }
+
+  setItemFilter(e: Ent, item?: ItemKey): boolean {
+    if (this.get(e.x, e.y) !== e || !this.hasRegion('fernwash')
+      || (e.kind !== 'sorter' && e.kind !== 'storage')
+      || (item === undefined ? e.kind === 'sorter' : !Object.hasOwn(ITEMS, item))) return false;
+    e.filter = item;
+    return true;
+  }
+
+  setFreightChannel(e: Ent, channel: number): boolean {
+    if (e.channel === undefined || this.get(e.x, e.y) !== e
+      || !Number.isInteger(channel) || channel < 0 || channel >= FREIGHT_CHANNELS) return false;
+    if (e.channel !== channel && e.kind === 'freight_receive') {
+      const oldGroup = this.freightReceivers[e.channel];
+      oldGroup.splice(oldGroup.indexOf(e), 1);
+      this.freightReceivers[channel].push(e);
+    }
+    e.channel = channel;
+    return true;
+  }
+
+  freightLinks(e: Ent): number {
+    if (e.kind !== 'freight_send' || e.channel === undefined) return 0;
+    const origin = regionIdAt(e.x, e.y);
+    return this.freightReceivers[e.channel].filter(station => regionIdAt(station.x, station.y) !== origin).length;
+  }
+
+  setAdvancedRecipe(e: Ent, id: string): boolean {
+    if (e.kind !== 'advanced_assembler' || this.get(e.x, e.y) !== e || !this.availableRecipes(e).some(r => r.id === id)) return false;
+    if (id !== e.selectedRecipe && (e.recipe || e.pool?.size)) return false;
+    e.selectedRecipe = id;
+    return true;
+  }
+
+  availableRecipes(e: Ent): Recipe[] {
+    const all = recipesFor(e.kind);
+    if (e.kind !== 'advanced_assembler' || !this.campaign) return all;
+    const { mode, stage } = this.campaign;
+    const initial = mode === 'research' ? 'asm_probe' : 'asm_core';
+    const final = mode === 'research' ? 'asm_payload' : 'asm_dispatch';
+    return all.filter(recipe => recipe.id === initial || (stage !== 'charter' && recipe.id === final));
   }
 
   // ---------------- 核心：向相邻格推物品 ----------------
@@ -291,9 +482,17 @@ export class Sim {
         t.queue!.push(ty);
         return true;
       case 'storage':
-        if (t.queue!.length >= STORAGE_CAP) return false;
+        if (t.queue!.length >= STORAGE_CAP || (t.filter && t.filter !== ty)) return false;
         t.queue!.push(ty);
         return true;
+      case 'sorter':
+      case 'freight_send':
+        if (travel !== t.rot || t.queue!.length >= NODE_QUEUE_MAX) return false;
+        t.queue!.push(ty);
+        return true;
+      case 'freight_receive':
+      case 'generator':
+        return false;
       case 'export': {
         t.counts!.set(ty, (t.counts!.get(ty) || 0) + 1);
         this.ledger.exported[ty]++;
@@ -317,6 +516,10 @@ export class Sim {
         const edge = ((travel + 2) % 4) as Dir; // 被穿过的边（外法线方向）
         const ports = inputPortsFor(t.kind, t.rot);
         if (!ports.includes(edge)) return false;
+        if (t.kind === 'advanced_assembler') {
+          const selected = t.selectedRecipe && recipeById(t.selectedRecipe);
+          if (!selected || !selected.inputs[ty]) return false;
+        } else if (POWER_USE[t.kind] && !recipesFor(t.kind).some(recipe => recipe.inputs[ty])) return false;
         // 单品上限：防止某一种原料灌满混合池，饿死其他原料（防死锁）
         if ((t.pool!.get(ty) || 0) >= POOL_PER_TYPE) return false;
         if (mapTotal(t.pool) >= POOL_CAP) return false;
@@ -330,6 +533,8 @@ export class Sim {
   tick(dt: number) {
     this.time += dt;
     if (this.activeContract && this.time > this.activeContract.deadline) this.endContract(0);
+    if (this.campaign?.mode === 'corporate' && this.campaign.stage === 'complete'
+      && !this.activeContract && this.time >= this.nextAutomaticContract) this.acceptContract();
     // 机器（先推输出，腾出空间）
     for (const e of this.procs) this.tickProc(e, dt);
     // 节点
@@ -378,8 +583,8 @@ export class Sim {
       }
     } else {
       outTotal = mapTotal(e.out);
-      if (!e.recipe) this.tryStart(e, outTotal);
-      if (e.recipe) {
+      if (e.powered !== false && !e.recipe) this.tryStart(e, outTotal);
+      if (e.powered !== false && e.recipe) {
         e.progress! += (dt * SPEED_DIV[(e.level || 1) - 1]) / e.recipe.time;
         if (e.progress! >= 1) {
           for (const k of Object.keys(e.recipe.outputs) as ItemKey[]) {
@@ -388,6 +593,7 @@ export class Sim {
             this.ledger.produced[k] += n;
             this.onProduce?.(k);
           }
+          if (e.kind === 'cultivator') this.restoredTiles.add(tileKey(e.x, e.y));
           e.recipe = null; e.progress = 0; e.active = 1;
           outTotal = mapTotal(e.out);
           this.tryStart(e, outTotal); // 立即尝试下一件
@@ -407,7 +613,8 @@ export class Sim {
     }
     // 状态统计
     let st: MachineState;
-    if (e.recipe) st = 'working';
+    if (e.powered === false) st = 'unpowered';
+    else if (e.recipe) st = 'working';
     else if (outTotal >= (e.kind === 'extractor' ? EXTRACT_OUT_CAP : OUT_CAP)) st = 'blocked';
     else if (mapTotal(e.pool) > 0) st = 'starved';
     else st = 'idle';
@@ -419,8 +626,9 @@ export class Sim {
 
   private tryStart(e: Ent, outTotal: number) {
     if (e.kind === 'extractor') return;
-    const recipes = recipesFor(e.kind as 'furnace' | 'press' | 'assembler' | 'recycler');
+    const recipes = recipesFor(e.kind);
     for (const r of recipes) {
+      if (e.kind === 'advanced_assembler' && r.id !== e.selectedRecipe) continue;
       let ok = true;
       for (const k of Object.keys(r.inputs) as ItemKey[]) {
         if ((e.pool!.get(k) || 0) < r.inputs[k]!) { ok = false; break; }
@@ -442,8 +650,25 @@ export class Sim {
   private tickNode(e: Ent) {
     const q = e.queue!;
     if (q.length === 0) return;
-    if (e.kind === 'merger') {
+    if (e.kind === 'freight_send') {
+      if (this.time < e.readyAt!) return;
+      const origin = regionIdAt(e.x, e.y);
+      let receiver: Ent | undefined;
+      for (const station of this.freightReceivers[e.channel!]) {
+        if (regionIdAt(station.x, station.y) === origin || station.queue!.length >= STORAGE_CAP) continue;
+        if (!receiver || tileKey(station.x, station.y) < tileKey(receiver.x, receiver.y)) receiver = station;
+      }
+      if (!receiver) return;
+      receiver.queue!.push(q.shift()!);
+      e.readyAt = this.time + FREIGHT_SECONDS;
+      e.active = 1;
+      receiver.active = 1;
+      this.freightDeliveries++;
+    } else if (e.kind === 'freight_receive' || e.kind === 'merger') {
       if (this.tryPushTo(e.x, e.y, e.rot, q[0])) q.shift();
+    } else if (e.kind === 'sorter') {
+      const direction = q[0] === e.filter ? e.rot : relDir(e.rot, RIGHT);
+      if (this.tryPushTo(e.x, e.y, direction, q[0])) q.shift();
     } else if (e.kind === 'splitter') {
       // 三个出口方向按轮询序尝试（内联计算，避免每 tick 分配 outs 数组）
       const rr = e.rr!;
@@ -540,6 +765,7 @@ export class Sim {
   private endContract(reward: number) {
     this.activeContract = null;
     this.contractIndex++;
+    this.nextAutomaticContract = this.time + 30;
     this.onContractEnd?.(reward);
   }
 
@@ -606,7 +832,7 @@ export class Sim {
       if (e) ents.push(this.serializeEnt(e));
     }
     return {
-      v: 2, time: this.time,
+      v: this.campaign ? 3 : 2, time: this.time,
       ledger: this.ledger,
       ents,
       goals: [...this.goals],
@@ -614,6 +840,13 @@ export class Sim {
       orderIdx: this.orderIdx,
       orderBase: this.orderBase,
       contract: { index: this.contractIndex, active: this.activeContract },
+      ...(this.campaign && { frontier: {
+        campaign: { ...this.campaign },
+        regions: this.openRegions.map(area => area.id),
+        restoredTiles: [...this.restoredTiles],
+        freightDeliveries: this.freightDeliveries,
+        nextAutomaticContract: this.nextAutomaticContract,
+      } }),
       hist: this.hist.map(h => [h.t, h.credits, h.exported] as [number, number, number]),
     };
   }
@@ -621,7 +854,7 @@ export class Sim {
   private serializeEnt(e: Ent): SerEnt {
     const s: SerEnt = { k: e.kind, x: e.x, y: e.y, r: e.rot };
     if (e.items) s.d = { items: e.items.map(it => [it.ty, Math.round(it.p * 1000) / 1000, it.entry]) };
-    else if (e.queue) s.d = { queue: [...e.queue], rr: e.rr };
+    else if (e.queue) s.d = { queue: [...e.queue], rr: e.rr, filter: e.filter, channel: e.channel, readyAt: e.readyAt };
     else if (e.pool) s.d = {
       pool: [...e.pool].map(([k, v]) => [k, v]),
       out: [...e.out!].map(([k, v]) => [k, v]),
@@ -629,6 +862,7 @@ export class Sim {
       rec: e.recipe?.id || null,
       ore: e.ore,
       lvl: e.level || 1,
+      selectedRecipe: e.selectedRecipe,
     };
     else if (e.counts) s.d = { counts: [...e.counts].map(([k, v]) => [k, v]) };
     return s;
@@ -636,8 +870,22 @@ export class Sim {
 
   load(data: SaveData) {
     // 清空
-    this.cells.fill(null);
+    this.W = GRID; this.H = GRID;
+    this.cells = new Array(this.W * this.H).fill(null);
     this.belts = []; this.nodes = []; this.procs = []; this.terminals = [];
+    this.generators = [];
+    for (const receivers of this.freightReceivers) receivers.length = 0;
+    this.refreshPower();
+    this.patches.fill(0);
+    this.openRegions = [];
+    this.opened.clear();
+    this.scars.clear();
+    this.restoredTiles.clear();
+    this.campaign = null;
+    this.freightDeliveries = 0;
+    this.nextAutomaticContract = 0;
+    this.addRegion('harbor');
+    if (data.v === 3) this.loadFrontier(data.frontier);
     const cleanCount = (src: any): Record<ItemKey, number> => {
       const base = emptyCount();
       if (src && typeof src === 'object') {
@@ -688,5 +936,29 @@ export class Sim {
     let maxId = 0;
     for (const c of this.cells) if (c && c.id > maxId) maxId = c.id;
     this.nextId = maxId + 1;
+  }
+
+  private loadFrontier(frontier: SaveData['frontier']) {
+    const saved = frontier?.campaign;
+    if (!saved || !this.chooseCampaign(saved.mode, saved.seed)
+      || !['charter', 'commission', 'complete'].includes(saved.stage)
+      || !Array.isArray(frontier.regions) || frontier.regions[0] !== 'harbor' || !Array.isArray(frontier.restoredTiles)) {
+      throw new Error('Invalid frontier progression');
+    }
+    this.campaign!.stage = saved.stage;
+    for (const id of frontier.regions.slice(1)) {
+      const def = REGIONS[id];
+      if (!def?.parent || !this.opened.has(def.parent) || this.opened.has(id)) throw new Error('Invalid frontier region');
+      this.addRegion(id);
+    }
+    for (const key of frontier.restoredTiles) {
+      if (!this.scars.has(key)) throw new Error('Invalid restoration site');
+      this.restoredTiles.add(key);
+    }
+    const { freightDeliveries, nextAutomaticContract } = frontier;
+    if (!Number.isSafeInteger(freightDeliveries) || freightDeliveries < 0
+      || !Number.isFinite(nextAutomaticContract) || nextAutomaticContract < 0) throw new Error('Invalid frontier statistic');
+    this.freightDeliveries = freightDeliveries;
+    this.nextAutomaticContract = nextAutomaticContract;
   }
 }

@@ -3,12 +3,12 @@
 // ============================================================
 import { World } from './render/world';
 import { FactoryView } from './render/view';
-import { Hud, Tool, goalName, goalDesc } from './ui/hud';
+import { Hud, Tool, goalName, goalDesc, regionName } from './ui/hud';
 import { SoundKit } from './ui/sound';
 import { Sim, Ent, SaveData, SerEnt } from './sim/engine';
 import { BACKUP_KEY, SAVE_KEY, decodeFactorySave, loadFactorySave } from './sim/save';
 import { buildExample } from './sim/example';
-import { EntKind, Dir, PALETTE_ORDER, GRID } from './core/defs';
+import { EntKind, Dir, PALETTE_ORDER, ORE_ITEM, type ItemKey } from './core/defs';
 import { t, getLang, setLang, itemName, kindName } from './ui/i18n';
 
 const STEP = 1 / 30;
@@ -56,6 +56,40 @@ const hud = new Hud({
       saveGame(false);
     }
   },
+  chooseCampaign: (mode, seed) => {
+    if (!sim.chooseCampaign(mode, seed)) { hud.toast(t('frontier.seedInvalid'), 'error-toast'); return; }
+    hud.refreshFrontier(sim);
+    saveGame(false);
+  },
+  selectRegion: id => {
+    if (!sim.hasRegion(id)) {
+      if (!sim.unlockRegion(id)) return;
+      world.syncRegions(sim);
+      hud.refreshFrontier(sim);
+      hud.setCredits(sim.credits);
+      hud.toast(t('frontier.regionOpened', { name: regionName(id) }), 'goal-toast');
+      sound.play('goal');
+    }
+    world.focusRegion(id);
+    saveGame(false);
+  },
+  advanceCampaign: () => {
+    if (!sim.advanceCampaign()) return;
+    const run = sim.campaign!;
+    if (run.mode === 'research' && run.stage === 'complete') world.launchPayload();
+    hud.refreshFrontier(sim);
+    hud.toast(t(`frontier.${run.mode}.${run.stage === 'complete' ? 'complete' : 'charter'}`), 'goal-toast');
+    sound.play('goal');
+    saveGame(false);
+  },
+  configure: (key, value) => {
+    if (!selected) return;
+    const changed = key === 'filter' ? sim.setItemFilter(selected, value === 'any' ? undefined : value as ItemKey)
+      : key === 'channel' ? sim.setFreightChannel(selected, Number(value))
+        : sim.setAdvancedRecipe(selected, value);
+    if (changed) saveGame(false);
+    refreshInspector();
+  },
   exportFile: () => exportFile(),
   importFile: (f: File) => importFile(f),
   reset: () => hud.confirm(t('reset.title'), t('reset.msg'), t('reset.ok'), () => {
@@ -64,7 +98,7 @@ const hud = new Hud({
     hud.toast(t('toast.reset'));
   }),
   example: () => {
-    const hasStuff = sim.procs.length + sim.nodes.length + sim.belts.length > 0;
+    const hasStuff = !!sim.campaign || sim.procs.length + sim.nodes.length + sim.belts.length + sim.terminals.length > 0;
     const doBuild = () => {
       clearSim();
       buildExample(sim);
@@ -93,6 +127,7 @@ const hud = new Hud({
     // 立即重绘动态面板，不等下一次刷新周期
     hud.refreshStats(sim);
     hud.refreshOrders(sim);
+    hud.refreshFrontier(sim);
     hud.refreshGoals(sim);
     refreshInspector();
   },
@@ -150,7 +185,12 @@ function refreshInspector() {
 }
 
 function rotateAction() {
-  if (moving) { moving.data.r = ((moving.data.r + 1) % 4) as Dir; view.setGhost(moving.data.k, moving.data.r, true); return; }
+  if (moving) {
+    moving.data.r = ((moving.data.r + 1) % 4) as Dir;
+    const valid = !!hoverCell && sim.canInsert(moving.data.k, hoverCell.x, hoverCell.y);
+    view.setGhost(moving.data.k, moving.data.r, valid);
+    return;
+  }
   if (tool !== 'pointer' && tool !== 'bulldoze') {
     ghostRot = ((ghostRot + 1) % 4) as Dir;
     if (hoverCell) view.setGhost(tool as EntKind, ghostRot, sim.canPlace(tool as EntKind, hoverCell.x, hoverCell.y));
@@ -184,12 +224,16 @@ function placeMoving(cell: { x: number; y: number }) {
     sound.play('error');
     return;
   }
-  if (sim.get(cell.x, cell.y) !== null) {
+  if (d.k === 'cultivator' && !sim.isRestorationSite(cell.x, cell.y)) {
+    hud.toast(t('frontier.cropInvalid'), 'error-toast');
+    sound.play('error');
+    return;
+  }
+  if (!sim.insertEnt({ ...d, x: cell.x, y: cell.y })) {
     hud.toast(t('toast.occupied'), 'error-toast');
     sound.play('error');
     return;
   }
-  sim.insertEnt({ ...d, x: cell.x, y: cell.y });
   const e = sim.get(cell.x, cell.y)!;
   view.onPlaced(e);
   moving = null;
@@ -256,6 +300,14 @@ function placeAt(cell: { x: number; y: number }, kind: EntKind, rot: Dir) {
   return true;
 }
 
+function refreshTileHint(cell: { x: number; y: number } | null) {
+  if (moving || tool === 'bulldoze') return;
+  const ore = cell && sim.oreAt(cell.x, cell.y);
+  if (ore) hud.hint(t('frontier.tileOre', { item: itemName(ORE_ITEM[ore]) }));
+  else if (cell && sim.isRestorationSite(cell.x, cell.y)) hud.hint(t('frontier.crop'));
+  else hud.hint(tool === 'pointer' ? t('hint.pointer') : t('hint.build', { name: kindName(tool) }));
+}
+
 // ---------------- 指针输入 ----------------
 const dom = world.renderer.domElement;
 
@@ -289,12 +341,13 @@ dom.addEventListener('pointerdown', (ev) => {
 
 dom.addEventListener('pointermove', (ev) => {
   const cell = view.pickCell(ev.clientX, ev.clientY);
+  if (cell?.x !== hoverCell?.x || cell?.y !== hoverCell?.y) refreshTileHint(cell);
   hoverCell = cell;
   const mode = tool === 'pointer' ? 'pointer' : tool === 'bulldoze' ? 'bulldoze' : 'build';
   view.setHover(cell, mode);
   if (cell) {
     if (moving) {
-      const ok = sim.get(cell.x, cell.y) === null && (moving.data.k !== 'extractor' || !!sim.oreAt(cell.x, cell.y));
+      const ok = sim.canInsert(moving.data.k, cell.x, cell.y);
       view.setGhost(moving.data.k, moving.data.r, ok);
       view.positionGhost(cell);
     } else if (tool !== 'pointer' && tool !== 'bulldoze') {
@@ -311,20 +364,20 @@ dom.addEventListener('pointermove', (ev) => {
     // 逐格扩展，自动转向
     let dl: { x: number; y: number } = dragLast;
     let guard = 0;
-    while ((dl.x !== cell.x || dl.y !== cell.y) && guard++ < 64) {
+    while ((dl.x !== cell.x || dl.y !== cell.y) && guard++ < sim.W + sim.H) {
       const dx = Math.sign(cell.x - dl.x);
       const dy = Math.sign(cell.y - dl.y);
       let sx = 0, sy = 0;
       if (dx !== 0 && (dy === 0 || Math.abs(cell.x - dl.x) >= Math.abs(cell.y - dl.y))) sx = dx;
       else if (dy !== 0) sy = dy;
       const dir = (sx === 1 ? 0 : sx === -1 ? 2 : sy === 1 ? 1 : 3) as Dir;
+      const next: { x: number; y: number } = { x: dl.x + sx, y: dl.y + sy };
+      if (!sim.inBounds(next.x, next.y)) break;
       const cur = sim.get(dl.x, dl.y);
       if (cur && (cur.kind === 'belt' || cur.kind === 'turbo')) {
         cur.rot = dir;
         view.onRotated(cur);
       }
-      const next: { x: number; y: number } = { x: dl.x + sx, y: dl.y + sy };
-      if (next.x < 0 || next.y < 0 || next.x >= GRID || next.y >= GRID) break;
       placeAt(next, tool, dir);
       dl = next;
     }
@@ -338,7 +391,12 @@ dom.addEventListener('pointermove', (ev) => {
 window.addEventListener('pointerup', () => { dragging = false; dragLast = null; });
 window.addEventListener('pointercancel', () => { dragging = false; dragLast = null; });
 window.addEventListener('blur', () => { dragging = false; dragLast = null; });
-dom.addEventListener('pointerleave', () => { hoverCell = null; view.setHover(null, 'pointer'); view.positionGhost(null); });
+dom.addEventListener('pointerleave', () => {
+  hoverCell = null;
+  view.setHover(null, 'pointer');
+  view.positionGhost(null);
+  refreshTileHint(null);
+});
 dom.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---------------- 键盘 ----------------
@@ -425,6 +483,7 @@ function loadGame(verbose = true) {
 
 function applySave(save: ReturnType<typeof decodeFactorySave>) {
   sim.load(save.sim.serialize());
+  world.syncRegions(sim);
   paused = save.playback.paused;
   speedIdx = save.playback.speed;
   acc = 0;
@@ -438,6 +497,8 @@ function applySave(save: ReturnType<typeof decodeFactorySave>) {
   moving = null;
   switchTool('pointer');
   hud.refreshOrders(sim);
+  hud.refreshFrontier(sim);
+  hud.setCredits(sim.credits);
   hud.refreshStats(sim);
   hud.refreshGoals(sim);
 }
@@ -479,10 +540,14 @@ function snapshot() {
 
 function clearSim() {
   sim.load(emptySave());
+  world.syncRegions(sim);
+  world.focusRegion('harbor');
   view.rebuildAll();
   select(null);
   moving = null;
   view.setGhost(null, 0, true);
+  switchTool('pointer');
+  hud.refreshFrontier(sim);
 }
 
 // 自动存档（首次欢迎引导尚未选择时不写入空存档）
@@ -544,6 +609,7 @@ function refreshUi(rawDt: number) {
     hud.setClock(sim.time);
     hud.setCredits(sim.credits);
     hud.refreshOrders(sim);
+    hud.refreshFrontier(sim);
     refreshInspector();
   }
   statsAcc += rawDt;
@@ -573,7 +639,7 @@ function refreshUi(rawDt: number) {
     conservationError: sim.conservationError(),
     items: lastItems,
     fps: lastFps,
-    machines: sim.procs.length + sim.nodes.length + sim.terminals.length,
+    machines: sim.procs.length + sim.nodes.length + sim.terminals.length + sim.generators.length,
     belts: sim.belts.length,
   }),
   setSpeed: (i: number) => { paused = false; speedIdx = Math.max(0, Math.min(2, i)); hud.setSpeedBtn(speedIdx + 1); },
@@ -603,6 +669,7 @@ function frame(now: number) {
     simDt = steps * STEP;
   }
   world.animate(rawDt, sim.time);
+  world.syncRestoration(sim);
   view.update(simDt, sim.time);
   world.render();
   updatePerf(rawDt, simMs);
@@ -615,6 +682,7 @@ const hasSave = loadGame(false);
 hud.setTool('pointer');
 hud.refreshStats(sim);
 hud.refreshGoals(sim);
+hud.refreshFrontier(sim);
 refreshInspector();
 if (!hasSave) {
   paused = true;

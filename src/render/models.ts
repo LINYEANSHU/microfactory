@@ -309,6 +309,79 @@ function buildRecycler(): MachineView {
   };
 }
 
+function frontierBase(deck: number): THREE.Group {
+  const g = new THREE.Group();
+  g.add(box(0.94, 0.14, 0.94, M(0x384554, { flat: true }), 0, 0.07, 0));
+  g.add(box(0.79, 0.08, 0.79, M(deck, { flat: true }), 0, 0.18, 0));
+  return g;
+}
+
+function buildGenerator(): MachineView {
+  const g = frontierBase(0xb69456);
+  g.add(cyl(0.09, 0.17, 0.67, 8, M(0x455866), 0, 0.5, 0));
+  const rotor = new THREE.Group();
+  rotor.position.set(0.09, 0.86, 0);
+  const axis = cyl(0.1, 0.1, 0.3, 10, M(0x687c81));
+  axis.rotation.z = Math.PI / 2;
+  rotor.add(axis);
+  for (let i = 0; i < 3; i++) {
+    const arm = new THREE.Group();
+    arm.rotation.x = i * Math.PI * 2 / 3;
+    arm.add(box(0.05, 0.33, 0.086, M(0xf2ce7a), 0.15, 0.22, 0));
+    rotor.add(arm);
+  }
+  g.add(rotor);
+  return { group: g, update(dt) { rotor.rotation.x += dt * 2.8; }, dispose() {} };
+}
+
+function buildFrontierProcessor(kind: 'refinery' | 'chemistry' | 'cultivator' | 'advanced_assembler'): MachineView {
+  const colors = { refinery: 0xbd694a, chemistry: 0x6c90a9, cultivator: 0x729a61, advanced_assembler: 0x978fbd };
+  const paint = M(colors[kind], { flat: true });
+  const frame = M(0x495969, { flat: true });
+  const g = frontierBase(colors[kind]);
+  if (kind === 'refinery') {
+    g.add(box(0.56, 0.49, 0.66, frame, 0, 0.45, 0));
+    g.add(box(0.09, 0.26, 0.41, paint, 0.3, 0.42, 0));
+    g.add(cyl(0.085, 0.11, 0.41, 8, paint, -0.17, 0.73, 0.19));
+    g.add(cyl(0.07, 0.09, 0.26, 8, paint, -0.17, 0.65, -0.19));
+  } else if (kind === 'chemistry') {
+    for (const [x, h] of [[-0.19, 0.67], [0.19, 0.48]]) {
+      g.add(cyl(0.14, 0.16, h, 9, paint, x, 0.23 + h / 2, 0));
+      g.add(cyl(0.17, 0.17, 0.06, 9, frame, x, 0.47, 0));
+    }
+    g.add(box(0.37, 0.065, 0.07, frame, 0, 0.66, 0));
+  } else if (kind === 'cultivator') {
+    g.add(box(0.67, 0.14, 0.69, frame, 0, 0.28, 0));
+    g.add(box(0.61, 0.048, 0.63, paint, 0, 0.37, 0));
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+      g.add(cyl(0.02, 0.035, 0.19, 5, frame, sx * 0.22, 0.46, sz * 0.21));
+      g.add(cyl(0, 0.12, 0.25, 5, paint, sx * 0.22, 0.58, sz * 0.21));
+    }
+  } else {
+    g.add(box(0.58, 0.42, 0.58, frame, 0, 0.41, 0));
+    g.add(box(0.56, 0.09, 0.54, paint, 0, 0.66, 0));
+    for (const z of [-0.17, 0, 0.17]) g.add(box(0.07, 0.25, 0.08, paint, 0.31, 0.42, z));
+    g.add(cyl(0.07, 0.11, 0.15, 8, frame, 0, 0.77, 0));
+  }
+  const lamp = lampBulb();
+  lamp.position.set(0.37, 0.31, -0.32);
+  g.add(lamp);
+  return { group: g, update(_dt, time, e) { applyLamp(lamp, e, time); }, dispose() {} };
+}
+
+function buildFreight(receive: boolean): MachineView {
+  const paint = receive ? 0x72a3a0 : 0xd39359;
+  const g = frontierBase(paint);
+  const frame = M(0x53616d, { flat: true });
+  for (const z of [-0.32, 0.32]) g.add(box(0.11, 0.58, 0.1, frame, 0, 0.45, z));
+  g.add(box(0.17, 0.13, 0.76, M(paint, { flat: true }), 0, 0.77, 0));
+  g.add(box(0.64, 0.035, 0.42, frame, 0, 0.24, 0));
+  const lamp = lampBulb();
+  lamp.position.set(0.11, 0.77, -0.27);
+  g.add(lamp);
+  return { group: g, update(_dt, _time, e) { lamp.material = e.queue?.length ? LAMP.green : LAMP.off; }, dispose() {} };
+}
+
 const BUILDERS: Record<EntKind, () => MachineView> = {
   extractor: buildExtractor,
   furnace: buildFurnace,
@@ -319,6 +392,14 @@ const BUILDERS: Record<EntKind, () => MachineView> = {
   merger: () => buildNode(0x5b6470, 0x454c5c, 0xd8a04e),
   storage: buildStorage,
   export: buildExport,
+  generator: buildGenerator,
+  refinery: () => buildFrontierProcessor('refinery'),
+  chemistry: () => buildFrontierProcessor('chemistry'),
+  cultivator: () => buildFrontierProcessor('cultivator'),
+  advanced_assembler: () => buildFrontierProcessor('advanced_assembler'),
+  sorter: () => buildNode(0x54516b, 0x74628d, 0xdbbd6a),
+  freight_send: () => buildFreight(false),
+  freight_receive: () => buildFreight(true),
   belt: () => ({ group: new THREE.Group(), update() {}, dispose() {} }), // 传送带由合并网格渲染
   turbo: () => ({ group: new THREE.Group(), update() {}, dispose() {} }),
 };

@@ -17,7 +17,7 @@ function position(value: unknown): value is Position {
 export function decodeFactorySave(raw: string) {
   const data = JSON.parse(raw);
   const payload = data?.sim ?? data;
-  if (!payload || ![1, 2].includes(payload.v) || !Array.isArray(payload.ents)
+  if (!payload || ![1, 2, 3].includes(payload.v) || !Array.isArray(payload.ents)
     || !payload.ledger || typeof payload.ledger !== 'object' || Array.isArray(payload.ledger)) {
     throw new Error('Invalid factory save');
   }

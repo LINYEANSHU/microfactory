@@ -37,6 +37,15 @@ Captured during the November 6, 2026 desktop Chromium review using SwiftShader f
 
 Connect one working line, then inspect its buffers and bottlenecks. Orders and milestones supply the next targets.
 
+## Expand into neighboring regions
+
+Choose a project and enter a world seed in **Regions & projects**. Both projects start on the original 32×32 Harbor. Ship six gears and spend 60 credits to open Fernwash, then work toward Glassfen and Skyreach. Select an open region to move the camera there.
+
+- **Research expedition:** restore habitat, ship survey probes, and launch a manufactured orbital payload from Skyreach.
+- **Automation company:** fulfill orders, retain profit, and build a regional freight network. Commission dispatch units to let the corporation accept rush contracts automatically.
+
+Each region needs its own generators. Sort the slag from cobalt alloy, combine alloy and mineral reagent in a chemical tower, and feed slag and biomineral to a cultivator on a brown restoration plot. Inspect Storage to filter its intake. Set freight senders and receivers in separate regions to the same channel.
+
 ## Run the browser version from source
 
 Requires Node.js 22.12 or a newer 22.x release (or 24.x), npm and a modern browser with WebGL 2 support.
@@ -78,6 +87,7 @@ Narrow layouts switch panels through “Build” and “Overview”; “More” 
 Accept a rush contract in the Orders panel to earn a bonus for shipments made before its deadline. The contract clock stops when the game is paused.
 
 The game autosaves every 20 seconds and when the page is hidden. Manual saving is also available. Saves preserve the active contract, pause state, speed, and camera. If the latest browser save is damaged, the game tries the previous one.
+Frontier saves also retain the seed, restored plots, freight configuration, and project progress. Existing factories can choose a project in place.
 Use JSON export/import under “More” for backups or migration. Snapshots include a machine currently being moved.
 Imports load into an isolated simulation before replacing the active factory.
 
