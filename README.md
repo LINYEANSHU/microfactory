@@ -6,18 +6,26 @@
 
 **铺一条产线，看堵塞从下游一路传回来，再亲手解决它。**
 MicroFactory 是单人 3D 自动化工厂：采矿、熔炼、冲压、装配、出货，订单收入用来升级机器、扩大生产。
-游戏状态留在浏览器本地，无账号或后端服务。
+游戏在本地运行，无需账号或后端服务。
 
-<img src="assets/readme/current-desktop.png" width="100%" alt="2026-11-06 当前界面：浮岛上的示例工厂，左侧建造栏，右侧订单和可折叠统计">
+## Windows 下载
+
+**[下载 Windows x64 便携版（ZIP）](https://github.com/LINYEANSHU/microfactory/releases/download/windows-v1.0.0/microfactory-windows-x64.zip)** · [发布说明](https://github.com/LINYEANSHU/microfactory/releases/tag/windows-v1.0.0)
+
+完整解压 ZIP，进入 `MicroFactory` 文件夹并双击 `MicroFactory.exe`，然后点击「加载示例工厂」。移动游戏时请保留整个文件夹。
+
+<img src="assets/readme/windows-desktop.webp" width="100%" alt="MicroFactory Windows 桌面版的示例产线，左侧为建造栏，右侧为订单与工厂统计">
 
 <details>
-<summary>查看窄屏界面（390 × 844）</summary>
+<summary>查看浏览器界面（桌面与窄屏）</summary>
+
+<img src="assets/readme/current-desktop.png" width="100%" alt="浏览器桌面布局，显示浮岛上的示例工厂和两侧控制栏">
 
 <img src="assets/readme/current-mobile.png" width="390" alt="窄屏工厂界面：顶栏分行显示，建造与概览按需打开，中央保留产线视野">
 
-</details>
-
 截图来自 2026-11-06 的桌面 Chromium 审查，使用 SwiftShader 在 CPU 上执行 WebGL；窄视口截图不代表真实手机测试。
+
+</details>
 
 ## 产线为什么会堵
 
@@ -29,7 +37,7 @@ MicroFactory 是单人 3D 自动化工厂：采矿、熔炼、冲压、装配、
 
 先把一条线接通，再观察缓冲区与瓶颈；订单和里程碑会给出后续目标。
 
-## 快速开始
+## 从源码运行浏览器版
 
 需要 Node.js 22.12 或更新的 22.x（也支持 24.x）、npm 和支持 WebGL 2 的现代浏览器。
 
@@ -67,11 +75,11 @@ Windows PowerShell 如拦截 npm 脚本，可使用 `npm.cmd` 执行相同命令
 
 ## 存档与迁移
 
-每 20 秒自动保存到当前浏览器的 `localStorage`，也可手动保存。
+每 20 秒自动保存到当前应用或浏览器的 `localStorage`，也可手动保存。
 「更多」中的 JSON 导出/导入用于备份与跨浏览器迁移；搬移中的机器也会写入快照。
 导入先在独立模拟中加载，通过后才替换当前工厂。
 
-浏览器配置、网站地址或端口变化可能对应另一份本地存储；清理网站数据会删除本地存档。
+Windows 桌面版默认在 `%APPDATA%\Entertainment Desktop\microfactory` 保存数据。浏览器版的存档随浏览器配置和站点地址保存。
 长期保留的工厂请导出 `microfactory-save.json`。
 
 ## 验证与边界
@@ -87,10 +95,12 @@ npm run build
 - **38 / 38 测试通过**，覆盖生产节拍、物流背压、回收、经济、迁移和长时间模拟。
 - 模拟采用 30 Hz 固定步长，独立于 Three.js；测试核对物品守恒账本。
 - 同日浏览器审查覆盖 1440 × 900、390 × 844、语言切换、存档、损坏导入与 WebGL 启动失败恢复。
-- 游戏仍使用 Three.js / WebGL 2；SwiftShader 是本次 CPU 审查的渲染方式，普通开发命令不会强制 CPU 渲染。
+- 游戏使用 Three.js / WebGL 2。Windows 桌面版通过 SwiftShader 在 CPU 上渲染；浏览器版遵循浏览器的渲染设置。
 - 未验证真实手机、其他浏览器引擎或硬件渲染性能；这里不提供通用 FPS 承诺。
 
 ## 开发入口
+
+在 Windows x64 上使用 Node.js 24 运行 `node desktop/build.cjs`，桌面包生成到 `desktop/dist/`。[桌面构建脚本](desktop/build.cjs)
 
 `src/sim/` 是模拟和序列化，`src/render/` 是场景与实例化绘制，`src/ui/` 是界面与合成音效。
 规则与产品定位见 [PRODUCT.md](PRODUCT.md)，设计说明见 [DESIGN.md](DESIGN.md)。

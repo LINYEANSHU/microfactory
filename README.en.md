@@ -6,18 +6,26 @@
 
 **Build a line, watch a jam travel upstream, then find the bottleneck.**
 MicroFactory is a single-player 3D automation game: mine, smelt, press, assemble and ship.
-Order income pays for upgrades and expansion. Game state stays in your browser, with no account or backend service.
+Order income pays for upgrades and expansion. The game runs locally without an account or backend service.
 
-<img src="assets/readme/current-desktop.png" width="100%" alt="Current interface, November 6, 2026: a demo factory on a floating island, build palette at left and orders with collapsible statistics at right">
+## Download for Windows
+
+**[Download the portable Windows x64 build (ZIP)](https://github.com/LINYEANSHU/microfactory/releases/download/windows-v1.0.0/microfactory-windows-x64.zip)** · [Release notes](https://github.com/LINYEANSHU/microfactory/releases/tag/windows-v1.0.0)
+
+Extract the entire ZIP, open the `MicroFactory` folder, double-click `MicroFactory.exe`, and choose “Load demo factory”. Keep the folder together when moving the game.
+
+<img src="assets/readme/windows-desktop.webp" width="100%" alt="Demo production line in MicroFactory for Windows, with the build palette at left and orders and statistics at right">
 
 <details>
-<summary>View the narrow layout (390 × 844)</summary>
+<summary>View the browser layouts (desktop and narrow)</summary>
+
+<img src="assets/readme/current-desktop.png" width="100%" alt="Desktop browser layout showing the floating-island demo factory and side controls">
 
 <img src="assets/readme/current-mobile.png" width="390" alt="Narrow factory layout: wrapped toolbar, on-demand Build and Overview panels, and an unobstructed view of the conveyors">
 
-</details>
-
 Captured during the November 6, 2026 desktop Chromium review using SwiftShader for CPU WebGL rendering. The narrow viewport is not a physical-phone test.
+
+</details>
 
 ## Why the line stops
 
@@ -29,7 +37,7 @@ Captured during the November 6, 2026 desktop Chromium review using SwiftShader f
 
 Connect one working line, then inspect its buffers and bottlenecks. Orders and milestones supply the next targets.
 
-## Getting started
+## Run the browser version from source
 
 Requires Node.js 22.12 or a newer 22.x release (or 24.x), npm and a modern browser with WebGL 2 support.
 
@@ -67,11 +75,11 @@ Narrow layouts switch panels through “Build” and “Overview”; “More” 
 
 ## Saves and migration
 
-The game auto-saves every 20 seconds to the current browser's `localStorage`; manual saving is also available.
+The game autosaves every 20 seconds to the active app or browser's `localStorage`. Manual saving is also available.
 Use JSON export/import under “More” for backups or migration. Snapshots include a machine currently being moved.
 Imports load into an isolated simulation before replacing the active factory.
 
-A different browser profile, site address or port may use separate storage. Clearing site data removes local saves.
+The Windows app stores data in `%APPDATA%\Entertainment Desktop\microfactory` by default. Browser saves are tied to the browser profile and site address.
 Export `microfactory-save.json` to keep a long-lived factory.
 
 ## Verification and limits
@@ -87,10 +95,12 @@ npm run build
 - **38 / 38 tests passed**, covering production timing, back-pressure, recycling, economy, migration and long simulations.
 - Simulation uses a fixed 30 Hz step independently of Three.js; tests check the item-conservation ledger.
 - The same-day browser review covered 1440 × 900 and 390 × 844 layouts, language switching, saves, malformed imports and WebGL startup recovery.
-- The game uses Three.js / WebGL 2. SwiftShader supplied CPU rendering for that review; the normal development command does not force CPU rendering.
+- The game uses Three.js / WebGL 2. The Windows app renders on the CPU with SwiftShader. The web version follows the browser's rendering settings.
 - Physical phones, other browser engines and hardware-rendering performance were not verified. There is no universal FPS guarantee.
 
 ## Development entry points
+
+On Windows x64 with Node.js 24, run `node desktop/build.cjs` to produce the desktop package in `desktop/dist/`. [Desktop build script](desktop/build.cjs)
 
 `src/sim/` contains simulation and serialization, `src/render/` the scene and instanced drawing, and `src/ui/` the interface and synthesized audio.
 See [PRODUCT.md](PRODUCT.md) and [DESIGN.md](DESIGN.md) for the product and design notes (Chinese).

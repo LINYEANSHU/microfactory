@@ -15,3 +15,9 @@ debug_example.ts
 *.local
 .DS_Store
 npm-debug.log*
+
+# Generated Windows desktop artifacts
+/desktop/.cache/
+/desktop/dist/
+/desktop/qa/
+/desktop/node_modules/

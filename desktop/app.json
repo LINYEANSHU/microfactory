@@ -1,0 +1,8 @@
+{
+  "id": "microfactory",
+  "name": "MicroFactory 微型工厂",
+  "exe": "MicroFactory",
+  "vite": true,
+  "background": "#181410",
+  "webgl": true
+}
